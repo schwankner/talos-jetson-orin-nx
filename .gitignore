@@ -1,0 +1,41 @@
+# ── Credentials (never commit) ───────────────────────────────────────────────
+talosconfig
+kubeconfig
+*.key
+*.pem
+*.crt
+
+# ── Build outputs (large binaries, reproduced by scripts) ────────────────────
+dist/
+imager-out-*/
+*.efi
+*.efi.zst
+*.raw
+*.raw.zst
+*.raw.xz
+
+# ── Intermediate build artifacts ─────────────────────────────────────────────
+*.xz
+*.zst
+initramfs-*.xz
+initramfs-*.zst
+kernel-modules-*/
+systemd-boot.efi
+
+# ── macOS system files ───────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+__MACOSX/
+
+# ── Editor / IDE ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Claude Code internal state ────────────────────────────────────────────────
+.claude/
