@@ -1,0 +1,30 @@
+arch: arm64
+platform: metal
+secureboot: false
+version: v1.12.6
+input:
+  kernel:
+    path: /usr/install/arm64/vmlinuz
+  initramfs:
+    path: /usr/install/arm64/initramfs.xz
+  sdStub:
+    path: /usr/install/arm64/systemd-stub.efi
+  sdBoot:
+    path: /usr/install/arm64/systemd-boot.efi
+  baseInstaller:
+    imageRef: host.docker.internal:5001/custom-installer:v1.12.6-6.18.18
+    forceInsecure: true
+  systemExtensions:
+    - imageRef: host.docker.internal:5001/kernel-modules-clang:1.1.0-6.18.18-talos
+      forceInsecure: true
+    - imageRef: host.docker.internal:5001/nvidia-tegra-nvgpu:3.0.0-6.18.18-talos
+      forceInsecure: true
+    - imageRef: host.docker.internal:5001/nvidia-firmware-ext:v3
+      forceInsecure: true
+customization:
+  extraKernelArgs:
+    - console=ttyTCU0,115200
+    - firmware_class.path=/usr/lib/firmware
+output:
+  kind: uki
+  outFormat: raw
