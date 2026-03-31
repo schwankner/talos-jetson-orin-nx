@@ -1,0 +1,107 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ollama
+---
+# Persistent storage for Ollama models on NVMe EPHEMERAL partition
+# /var is mounted from /dev/nvme0n1p4 (125 GB available)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ollama-models-pv
+spec:
+  capacity:
+    storage: 80Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /var/lib/ollama-models
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+  namespace: ollama
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 80Gi
+  volumeName: ollama-models-pv
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      tolerations:
+        - operator: Exists
+      hostPID: false
+      containers:
+        - name: ollama
+          image: dustynv/ollama:r36.4.0
+          imagePullPolicy: IfNotPresent
+          command: ["ollama", "serve"]
+          ports:
+            - containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            - name: OLLAMA_MODELS
+              value: "/models"
+          resources:
+            requests:
+              memory: 2Gi
+            limits:
+              memory: 14Gi
+          securityContext:
+            privileged: true        # Required for GPU device access on Talos
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: dev
+              mountPath: /dev
+            - name: nvidia-tegra-libs
+              mountPath: /usr/lib/aarch64-linux-gnu/nvidia
+              # Mounts real JetPack r36.4.1 GPU libs over the 0-byte stubs in the dustynv container.
+              # Required because Talos has no JetPack userspace stack on the host.
+              # Libs downloaded via install-l4t-libs job from NVIDIA APT repo.
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models
+        - name: dev
+          hostPath:
+            path: /dev              # Exposes all nvhost-* GPU devices to the container
+        - name: nvidia-tegra-libs
+          hostPath:
+            path: /var/lib/nvidia-tegra-libs/tegra  # Real JetPack libs: libnvrm_gpu.so, libcuda.so etc.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: ollama
+spec:
+  type: NodePort
+  selector:
+    app: ollama
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      nodePort: 31434
