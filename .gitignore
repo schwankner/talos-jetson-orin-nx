@@ -2,8 +2,10 @@
 talosconfig
 kubeconfig
 *.key
-*.pem
 *.crt
+# NOTE: keys/signing_key.pem is intentionally NOT ignored — it's a "build time
+# throw-away" key (not secret), needed to keep module signing reproducible across
+# kernel extension rebuilds. Committing it prevents "unavailable key" boot failures.
 
 # ── Build outputs (large binaries, reproduced by scripts) ────────────────────
 dist/

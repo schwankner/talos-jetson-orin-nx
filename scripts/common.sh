@@ -11,7 +11,7 @@ TALOS_VERSION="${TALOS_VERSION:-v1.12.6}"
 KERNEL_VERSION="${KERNEL_VERSION:-6.18.18}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-4.0.0}"          # 1.0.0 / 2.0.0 / 3.0.0 / 4.0.0
+NVGPU_VERSION="${NVGPU_VERSION:-5.0.0}"          # 1.0.0 / 2.0.0 / 3.0.0 / 4.0.0 / 5.0.0
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v4}"        # v1 / v2 / v3 / v4
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.1.0}"
 
@@ -25,7 +25,10 @@ IMG_FIRMWARE="${REGISTRY}/nvidia-firmware-ext:${FIRMWARE_EXT_TAG}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${REPO_ROOT}/dist"
 
+KEYS_DIR="${REPO_ROOT}/keys"
+
 info()  { echo "[INFO]  $*"; }
+warn()  { echo "[WARN]  $*" >&2; }
 error() { echo "[ERROR] $*" >&2; exit 1; }
 
 check_docker() {
