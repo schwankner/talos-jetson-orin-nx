@@ -10,6 +10,7 @@ cluster.
 
 ## Table of Contents
 
+0. [Quick Start (Scripts)](#0-quick-start-scripts)
 1. [Overview & Architecture](#1-overview--architecture)
 2. [Why This Is Non-Trivial](#2-why-this-is-non-trivial)
 3. [Repository Layout](#3-repository-layout)
@@ -43,6 +44,89 @@ cluster.
 13. [Cluster Recovery](#13-cluster-recovery)
 14. [Known Limitations](#14-known-limitations)
 15. [Reference: All Image Tags](#15-reference-all-image-tags)
+
+---
+
+## 0. Quick Start (Scripts)
+
+All build and deploy steps are scripted in `scripts/`. Environment variables override
+all defaults (registry, versions, node IP). Scripts are idempotent and CI-compatible.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `REGISTRY` | `10.0.10.24:5001` | Local OCI registry (reachable from Jetson) |
+| `REGISTRY_DOCKER` | `host.docker.internal:5001` | Registry as seen from inside Docker |
+| `TALOS_VERSION` | `v1.12.6` | Talos release |
+| `KERNEL_VERSION` | `6.18.18` | Kernel version (must match extensions) |
+| `NVGPU_VERSION` | `4.0.0` | nvgpu extension version to use |
+| `FIRMWARE_EXT_TAG` | `v4` | nvidia-firmware-ext tag |
+| `NODE_IP` | `10.0.10.38` | Jetson node IP |
+| `NODE_HOSTNAME` | `talos-smq-3hh` | Kubernetes node name |
+
+### Fresh Cluster Install (from scratch)
+
+```bash
+# 1. Build UKI with all extensions baked in (~3-5 min)
+./scripts/01-build-uki.sh
+
+# 2. Build bootable USB image and flash to USB drive
+./scripts/02-build-usb-image.sh
+sudo dd if=dist/talos-usb-nvgpu4.0.0.raw of=/dev/rdiskN bs=4m && sync
+
+# 3. Boot Jetson from USB, wipe NVMe STATE, enter maintenance mode
+#    Then apply machine config (installs Talos to NVMe):
+./scripts/03-apply-config.sh --insecure
+
+# 4. Fix NVMe boot (copy full 149MB UKI to NVMe EFI partition)
+./scripts/04-fix-nvme-boot.sh
+
+# 5. Bootstrap etcd and save credentials (run ONCE per fresh install)
+./scripts/05-bootstrap-cluster.sh
+
+# 6. Install JetPack r36.5 userspace libs for Ollama GPU support
+./scripts/07-install-l4t-libs.sh
+
+# 7. Deploy Ollama and pull model
+./scripts/06-deploy-ollama.sh
+```
+
+### Day-2 Operations
+
+```bash
+# Update machine config on running node:
+./scripts/03-apply-config.sh
+
+# After any upgrade/reinstall — re-fix NVMe boot:
+./scripts/04-fix-nvme-boot.sh
+
+# Re-install JetPack libs (lost after full wipe):
+./scripts/07-install-l4t-libs.sh
+
+# Test a different nvgpu extension version (for GPU debugging):
+NVGPU_VERSION=3.0.0 FIRMWARE_EXT_TAG=v3 ./scripts/08-test-nvgpu.sh
+```
+
+### CI Pipeline Example
+
+```yaml
+# .gitlab-ci.yml / GitHub Actions equivalent
+build-uki:
+  script:
+    - NVGPU_VERSION=4.0.0 FIRMWARE_EXT_TAG=v4 ./scripts/01-build-uki.sh
+  artifacts:
+    paths:
+      - dist/uki-nvgpu4.0.0/metal-arm64-uki.efi
+
+build-usb:
+  needs: [build-uki]
+  script:
+    - ./scripts/02-build-usb-image.sh
+  artifacts:
+    paths:
+      - dist/talos-usb-nvgpu4.0.0.raw
+```
 
 ---
 
@@ -181,45 +265,41 @@ completely bypassing the `/lib` symlink.
 ## 3. Repository Layout
 
 ```
-jetson-test/
-├── README.md                    ← This file
-├── controlplane.yaml            ← Talos machine config (apply to node)
-├── talosconfig                  ← talosctl credentials (Talos API)
-├── kubeconfig                   ← kubectl credentials (Kubernetes API)
+jetson-test/                         ← git repository root
+├── .gitignore                       ← excludes credentials, *.efi, *.raw, dist/
+├── README.md                        ← this file
+├── controlplane.yaml                ← Talos machine config (apply to node)
+├── ollama-deployment.yaml           ← Ollama Kubernetes Deployment + Service
 │
-├── imager-out-v8/               ← Final UKI build (definitive)
-│   ├── metal-arm64-uki.efi      ← 149 MB UKI with all extensions
-│   └── metal-arm64-uki.efi.zst  ← zstd-compressed UKI
+├── talosconfig                      ← !! gitignored — talosctl PKI credentials
+├── kubeconfig                       ← !! gitignored — kubectl PKI credentials
 │
-├── imager-out-v3/ … v7/         ← Previous build iterations (keep for reference)
+├── imager-profiles/                 ← Parameterized imager profiles (committed)
+│   ├── uki-nvgpu4.yaml              ← Stable UKI (nvgpu 4.0.0, firmware v4)
+│   └── uki-nvgpu3.yaml              ← Test UKI (nvgpu 3.0.0, firmware v3)
 │
-└── kernel-modules-6.18.18-talos/ ← Extracted kernel module tree (reference)
-
-/tmp/talos-metal-out/            ← Imager working directory (on build host)
-├── imager-profile-uki.yaml      ← Imager profile for UKI (current / definitive)
-├── imager-profile.yaml          ← Imager profile for raw disk image
-├── imager-profile-disk-usb.yaml ← Imager profile for USB boot image
-└── imager-profile-installer-v3.yaml ← Imager profile for custom installer
-
-/tmp/nvidia-firmware-v4/         ← nvidia-firmware-ext:v4 build context
-├── Dockerfile
-├── manifest.yaml
-└── rootfs/usr/lib/firmware/
-    ├── ga10b/                   ← GA10B GPU firmware (CORRECT path — v4 fix)
-    ├── nvidia/ga10b/            ← Legacy compat path (kept)
-    └── tegra23x/                ← Tegra SoC firmware
-
-~/talos-jetson/                  ← Talos PKI and machine configs (authoritative copy)
-├── controlplane.yaml
-├── talosconfig
-├── kubeconfig
-├── worker.yaml
-└── jetson-patch.yaml
+├── scripts/                         ← Reproducible build + deploy scripts (committed)
+│   ├── common.sh                    ← Shared env vars (REGISTRY, versions, etc.)
+│   ├── 01-build-uki.sh              ← Build UKI via imager (parameterizable)
+│   ├── 02-build-usb-image.sh        ← Build bootable USB raw disk image
+│   ├── 03-apply-config.sh           ← Apply Talos machine config (fresh or update)
+│   ├── 04-fix-nvme-boot.sh          ← Copy working UKI to NVMe EFI partition
+│   ├── 05-bootstrap-cluster.sh      ← Bootstrap etcd + retrieve credentials
+│   ├── 06-deploy-ollama.sh          ← Deploy Ollama + pull model
+│   ├── 07-install-l4t-libs.sh       ← Download JetPack r36.5 libs via K8s Job
+│   └── 08-test-nvgpu.sh             ← Build + deploy UKI with different nvgpu version
+│
+├── logs/                            ← UART debug logs from boot sessions (committed)
+│   └── uart-run-1..5.log
+│
+└── dist/                            ← !! gitignored — build outputs
+    └── uki-nvgpu4.0.0/
+        └── metal-arm64-uki.efi      ← 149 MB UKI (built by 01-build-uki.sh)
 ```
 
-> **Rule**: Always keep `~/PycharmProjects/jetson-test/` and `~/talos-jetson/` in sync.
-> After any cluster operation that produces new credentials, copy both `talosconfig`
-> and `kubeconfig` to both directories.
+> **Credentials**: `talosconfig` and `kubeconfig` contain TLS private keys and are
+> git-ignored. Keep a secure backup (e.g. encrypted password manager or `~/talos-jetson/`).
+> After any cluster operation that produces new credentials, save both files immediately.
 
 ---
 
