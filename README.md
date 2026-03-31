@@ -40,6 +40,7 @@ cluster.
     - [11.3 Clang Toolchain Consistency](#113-clang-toolchain-consistency)
     - [11.4 Kernel 6.18 API Changes](#114-kernel-618-api-changes)
     - [11.5 Undefined Symbols (L4T-specific)](#115-undefined-symbols-l4t-specific)
+    - [11.6 CUDA Error 999 — nvhost syncpoint](#116-cuda-error-999-cudastreamsynchronize--nvhost-syncpoint)
 12. [Running Ollama with GPU Acceleration](#12-running-ollama-with-gpu-acceleration)
 13. [Cluster Recovery](#13-cluster-recovery)
 14. [Known Limitations](#14-known-limitations)
@@ -60,10 +61,21 @@ all defaults (registry, versions, node IP). Scripts are idempotent and CI-compat
 | `REGISTRY_DOCKER` | `host.docker.internal:5001` | Registry as seen from inside Docker |
 | `TALOS_VERSION` | `v1.12.6` | Talos release |
 | `KERNEL_VERSION` | `6.18.18` | Kernel version (must match extensions) |
-| `NVGPU_VERSION` | `4.0.0` | nvgpu extension version to use |
+| `NVGPU_VERSION` | `5.0.0` | nvgpu extension version to use |
 | `FIRMWARE_EXT_TAG` | `v4` | nvidia-firmware-ext tag |
 | `NODE_IP` | `10.0.10.38` | Jetson node IP |
 | `NODE_HOSTNAME` | `talos-smq-3hh` | Kubernetes node name |
+
+### Signing Key Setup (once per repo clone)
+
+```bash
+# Generate signing key pair (saved to keys/ and committed)
+# Only needed once; skipped automatically if keys already exist
+./scripts/00-setup-keys.sh
+```
+
+The key pair in `keys/` is committed to the repository — it must match the key
+embedded in the running kernel. See [Section 11.2](#112-kernel-module-signing) for details.
 
 ### Fresh Cluster Install (from scratch)
 
@@ -73,7 +85,7 @@ all defaults (registry, versions, node IP). Scripts are idempotent and CI-compat
 
 # 2. Build bootable USB image and flash to USB drive
 ./scripts/02-build-usb-image.sh
-sudo dd if=dist/talos-usb-nvgpu4.0.0.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=dist/talos-usb-nvgpu5.0.0.raw of=/dev/rdiskN bs=4m && sync
 
 # 3. Boot Jetson from USB, wipe NVMe STATE, enter maintenance mode
 #    Then apply machine config (installs Talos to NVMe):
@@ -399,16 +411,27 @@ docker buildx build \
 |---|---|
 | `Pkgfile` | Add `LLVM_IMAGE: ghcr.io/siderolabs/llvm` and `LLVM_REV: v1.14.0-alpha.0`; update all LLVM references |
 | `kernel/build/pkg.yaml` | Use `LLVM=1 LLVM_IAS=1` in all make invocations; run `make olddefconfig LLVM=1` |
-| `kernel/build/config-arm64` | Disable module signing (4 lines — see below) |
+| `kernel/build/config-arm64` | Enable module signing with reproducible key (see below) |
+| `kernel/build/certs/signing_key.pem` | Copy from `keys/signing_key.pem` (see `00-setup-keys.sh`) |
+| `kernel/build/certs/signing_key.x509` | Copy from `keys/signing_key.x509` |
 | `kernel/build/scripts/filter-hardened-check.py` | Add Clang-specific exceptions for `CC_HAS_*` checks |
 
-**`config-arm64` changes** (disable module signing):
+**`config-arm64` changes** (module signing with reproducible key — **NOT disabled**):
+
+Module signing is **enabled** with a pre-generated, reproducible key stored in `keys/`.
+This is essential: the kernel embeds the public key at build time, and all out-of-tree
+modules (nvgpu, etc.) must be signed with the matching private key. If the key changes
+between kernel and extension builds, Talos boots into maintenance mode (no NVMe, no IP).
+
 ```
-# CONFIG_MODULE_SIG_ALL is not set
-# CONFIG_MODULE_SIG_FORCE is not set
-# CONFIG_MODULE_SIG is not set
-# CONFIG_MODULE_SIG_KEY is not set
+CONFIG_MODULE_SIG=y
+CONFIG_MODULE_SIG_ALL=y
+CONFIG_MODULE_SIG_FORCE=y
+CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"
 ```
+
+Run `./scripts/00-setup-keys.sh` before any kernel or extension build to ensure the key
+is in place. Keys are persisted in `keys/` and committed to the repository.
 
 ### 6.3 nvidia-tegra-nvgpu Extension
 
@@ -554,9 +577,33 @@ docker buildx build --platform linux/arm64 \
 
 The UKI is a single PE/EFI binary containing the kernel, initramfs, all system extensions,
 and the kernel command line embedded at build time. It boots directly from UEFI.
-The **v8 UKI** (149 MB, `imager-out-v8/`) is the definitive artifact with all fixes applied.
 
-**Imager profile** (`/tmp/talos-metal-out/imager-profile-uki.yaml`):
+Output: `dist/uki-nvgpu<VERSION>/metal-arm64-uki.efi` (≈148 MB)
+
+**Build with script (recommended)**:
+
+```bash
+./scripts/01-build-uki.sh
+# or with custom version:
+NVGPU_VERSION=5.0.0 ./scripts/01-build-uki.sh
+```
+
+**What the script does**:
+
+1. Calls `00-setup-keys.sh` to ensure signing keys are in place
+2. Extracts the LLVM/Clang kernel (`vmlinuz.efi`) from the custom-installer registry image
+3. Builds a temporary `custom-imager` Docker image that extends the stock imager
+   with our LLVM kernel at `/usr/install/arm64/vmlinuz` (using `--no-cache` to prevent
+   Docker from serving a stale cached layer)
+4. Runs the imager with the profile via stdin to produce the UKI
+
+> **Critical — LLVM kernel vs GCC kernel**: `ghcr.io/siderolabs/imager:v1.12.6` only
+> contains the GCC/GNU-compiled kernel at `/usr/install/arm64/vmlinuz`. Our extension
+> modules are built with Clang and signed with our reproducible key — they **cannot** load
+> into a GCC kernel (different signing key). The `custom-imager` step replaces the kernel
+> with our LLVM build before the UKI is assembled.
+
+**Imager profile** (generated by `01-build-uki.sh`):
 
 ```yaml
 arch: arm64
@@ -565,7 +612,7 @@ secureboot: false
 version: v1.12.6
 input:
   kernel:
-    path: /usr/install/arm64/vmlinuz
+    path: /usr/install/arm64/vmlinuz   # overridden with our LLVM kernel
   initramfs:
     path: /usr/install/arm64/initramfs.xz
   sdStub:
@@ -578,7 +625,7 @@ input:
   systemExtensions:
     - imageRef: host.docker.internal:5001/kernel-modules-clang:1.1.0-6.18.18-talos
       forceInsecure: true
-    - imageRef: host.docker.internal:5001/nvidia-tegra-nvgpu:4.0.0-6.18.18-talos
+    - imageRef: host.docker.internal:5001/nvidia-tegra-nvgpu:5.0.0-6.18.18-talos
       forceInsecure: true
     - imageRef: host.docker.internal:5001/nvidia-firmware-ext:v4
       forceInsecure: true
@@ -588,41 +635,43 @@ customization:
     - firmware_class.path=/usr/lib/firmware  # ELOOP fix — bypass /lib symlink
 output:
   kind: uki
-  outFormat: .zst
+  outFormat: raw
 ```
-
-**Build command**:
-
-```bash
-mkdir -p ~/PycharmProjects/jetson-test/imager-out-v8
-
-cat /tmp/talos-metal-out/imager-profile-uki.yaml | \
-docker run --rm -i \
-  --platform linux/arm64 \
-  --add-host host.docker.internal:host-gateway \
-  -v ~/PycharmProjects/jetson-test/imager-out-v8:/out \
-  ghcr.io/siderolabs/imager:v1.12.6 \
-  -
-```
-
-> **Note**: The imager must receive the profile via stdin (`-`), not as a file path argument.
-> `docker run ... imager /path/to/profile.yaml` silently produces a wrong output.
-
-Output: `imager-out-v8/metal-arm64-uki.efi` (149 MB) and `metal-arm64-uki.efi.zst`.
 
 ### 6.8 USB Boot Image
 
-A bootable USB disk image with systemd-boot and multiple copies of the UKI placed under
-different EFI paths for maximum UEFI firmware compatibility.
+A bootable USB disk image (FAT32, MBR) with the UKI placed at the standard ARM64
+fallback boot path `EFI/BOOT/BOOTAA64.EFI`. This is the maximum-compatibility approach —
+the Jetson UEFI firmware will boot it automatically without any boot menu selection.
 
-The USB image was built as a Kubernetes Job on the Jetson, which:
-1. Creates a 4 GB raw disk (GPT + FAT32 EFI partition)
-2. Installs systemd-boot to `EFI/BOOT/BOOTAA64.EFI`
-3. Copies the v8 UKI under five names (`talos-v8.efi`, `Talos-v1.12.6.efi`, etc.)
-4. Writes `loader.conf` (default: `talos-v8.efi`, timeout: 5s)
-5. Compresses the result with `xz -T0 -9`
+**Build with script (recommended)**:
 
-Output: `talos-usb-v3.raw.xz` (~740 MB compressed).
+```bash
+./scripts/02-build-usb-image.sh
+# or with custom version:
+NVGPU_VERSION=5.0.0 ./scripts/02-build-usb-image.sh
+```
+
+Output: `dist/talos-usb-nvgpu<VERSION>.raw` (≈150 MB)
+
+The script uses `hdiutil` on macOS (Docker privileged + loop device approach fails with
+Colima — loop device partitions `/dev/loopNp1` are not accessible from inside containers).
+
+**Flash to USB drive** (macOS):
+
+```bash
+# Find your USB drive number
+diskutil list
+
+# Flash (replace N with disk number — be very careful!)
+sudo dd if=dist/talos-usb-nvgpu5.0.0.raw of=/dev/rdiskN bs=4m && sync
+```
+
+**Flash to USB drive** (Linux):
+
+```bash
+sudo dd if=dist/talos-usb-nvgpu5.0.0.raw of=/dev/sdX bs=4M status=progress && sync
+```
 
 ---
 
@@ -978,21 +1027,68 @@ to the NVMe installation via `grubUseUKICmdline: true` (see Section 8).
 
 ### 11.2 Kernel Module Signing
 
-**Symptom**: `insmod nvgpu.ko` returns `Required key not available (-126)`.
+**Symptom**: `insmod nvgpu.ko` returns `Required key not available (-126)`, or Talos
+boots into maintenance mode with 6 kernel module rejections in dmesg, no NVMe, no IP.
 
-**Root cause**: `CONFIG_MODULE_SIG_FORCE=y` in the official Talos kernel. The signing
-key is ephemeral — created during the kernel build and destroyed afterward. Third-party
-modules cannot be signed with it.
+**Root cause (original)**: `CONFIG_MODULE_SIG_FORCE=y` in the official Talos kernel. The
+signing key is ephemeral — created during the kernel build and destroyed afterward.
+Third-party modules cannot be signed with it.
 
-**Fix**: Custom kernel with module signing completely disabled:
+**Root cause (after enabling signing)**: Key mismatch. If a new random key is generated
+between the kernel build and the extension build, the modules carry the new key's signature
+but the running kernel only trusts the old key. Result: all out-of-tree modules are rejected
+→ NVMe disappears → no STATE partition → maintenance mode → no IP.
+
+**Fix**: Module signing **enabled** with a **reproducible, committed key**:
+
+1. `./scripts/00-setup-keys.sh` generates an RSA-4096 key pair on first run and saves it
+   to `keys/signing_key.pem` + `keys/signing_key.x509`.
+2. The key is **committed to the repository** (it's a throw-away build key, not a secret).
+3. Every subsequent run reuses the same key — no regeneration unless `FORCE_NEW_KEY=1`.
+4. Before each kernel or extension build, `00-setup-keys.sh` copies the keys into the
+   talos-pkgs build directories.
+
+**Key lifecycle**:
+
+```bash
+# Normal usage — generate once, reuse forever:
+./scripts/00-setup-keys.sh
+
+# Force new key (BREAKING — requires rebuild of kernel + all extensions):
+FORCE_NEW_KEY=1 ./scripts/00-setup-keys.sh
+
+# Check the key serial embedded in your running kernel:
+talosctl -n 10.0.10.38 read /proc/keys | grep -i asymmetric
 ```
-# CONFIG_MODULE_SIG is not set
-# CONFIG_MODULE_SIG_ALL is not set
-# CONFIG_MODULE_SIG_FORCE is not set
-```
+
+**Key serial** (current, committed): `74FD747A092BD42575ED4CBE6F7E2479A6FEC740`
 
 The Vermagic string check (`6.18.18-talos SMP preempt mod_unload aarch64`) still applies
 and the kernel version must match exactly.
+
+### 11.6 CUDA Error 999 (cudaStreamSynchronize) — nvhost syncpoint
+
+**Symptom**: CUDA programs fail immediately with error 999 (`cudaErrorUnknown`) when
+calling `cudaStreamSynchronize()`. The GPU is visible (nvgpu loads), but compute fails.
+
+**Root cause**: The Jetson Orin NX GPU synchronization path in nvgpu relies on nvhost
+syncpoints (hardware semaphores). The upstream nvgpu driver (OE4T) depends on
+`CONFIG_TEGRA_GK20A_NVHOST=y`, which requires the `/dev/nvhost-ctrl` device. On Talos
+Linux (non-L4T), `/dev/nvhost-ctrl` does not exist. When nvgpu tries to use nvhost for
+`cudaStreamSynchronize`, it gets -ENXIO and maps it to CUDA error 999.
+
+**Fix**: Build nvgpu with `CONFIG_TEGRA_GK20A_NVHOST=n`. This disables the nvhost
+dependency and forces nvgpu to use the CSL (Channel Submit and Lock) path for GPU
+synchronization, which works without any L4T-specific devices.
+
+Applied in **nvgpu 5.0.0** extension (`nvidia-tegra-nvgpu:5.0.0-6.18.18-talos`):
+
+```bash
+# In the nvgpu Pkgfile / build env:
+make -C /lib/modules/.../build M=${NVGPU_SRC} \
+  CONFIG_GK20A_NVHOST=n \
+  ...
+```
 
 ### 11.3 Clang Toolchain Consistency
 
