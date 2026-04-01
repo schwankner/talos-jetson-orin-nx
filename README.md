@@ -71,6 +71,8 @@ GPU compute support in Kubernetes pods. This repository provides everything need
     - [12.4 Kernel 6.18 API Changes](#124-kernel-618-api-changes)
     - [12.5 Undefined Symbols (L4T-specific)](#125-undefined-symbols-l4t-specific)
     - [12.6 CUDA Error 999 — nvhost syncpoint](#126-cuda-error-999-cudastreamsynchronize--nvhost-syncpoint)
+    - [12.7 devfreq Governor Missing](#127-devfreq-governor-missing-nvgpu_scaling-not-found)
+    - [12.8 CDI Stack Bugs — containerd 2.x + Custom Device Plugin](#128-cdi-stack-bugs--containerd-2x--custom-device-plugin)
 13. [Running Ollama with GPU Acceleration](#13-running-ollama-with-gpu-acceleration)
     - [13.1 CDI Stack (Recommended — OOB GPU access)](#131-cdi-stack-recommended--oob-gpu-access)
     - [13.2 Legacy hostPath Approach](#132-legacy-hostpath-approach)
@@ -1303,6 +1305,80 @@ sed -i 's/"nvgpu_scaling"/"simple_ondemand"/g' "$GA10B"
 This replaces the hard-coded `"nvgpu_scaling"` string with `"simple_ondemand"` so nvgpu
 requests a governor that actually exists in the Talos kernel.
 
+### 12.8 CDI Stack Bugs — containerd 2.x + Custom Device Plugin
+
+Four bugs had to be fixed before CDI-based GPU injection worked end-to-end. All fixes
+are already applied in the current manifests — this section documents the root causes.
+
+#### Bug A — Talos `op: overwrite` requires existing file
+
+`manifests/talos/machine-patch-cdi.yaml` originally tried to create a new file
+`/etc/cri/conf.d/99-cdi.toml` with `op: overwrite`. This failed on every boot:
+
+```
+writeUserFiles failed: file must exist /etc/cri/conf.d/99-cdi.toml
+```
+
+The `op: overwrite` operation in Talos machine config verifies the target path exists
+before writing. New files must use `op: create`. The cascading failure caused the kubelet
+PKI directory to become read-only, blocking API server access until the next clean boot.
+
+**Fix**: Removed `99-cdi.toml` entirely. CDI plugin settings (`enable_cdi = true`,
+`cdi_spec_dirs = ["/var/run/cdi"]`) are now embedded directly in the `containerd.toml`
+overwrite, which exists on every Talos node by default.
+
+#### Bug B — containerd 2.x dropped pod annotation CDI support
+
+`squat/generic-device-plugin` was used initially with the plan to inject CDI via pod
+annotations (`cdi.k8s.io/gpu0: nvidia.com/gpu=0`). This never worked:
+
+```
+# containerd CRI logs (talosctl logs cri):
+CDI devices from CRI Config.CDIDevices: []
+```
+
+containerd 2.1.6 removed annotation-based CDI processing. The only supported path is the
+CRI `CDIDevices` field, which must be populated by the device plugin's `AllocateResponse`.
+`squat/generic-device-plugin` has no CDI support and returns `CDIDevices: []`.
+
+**Fix**: Replaced with a custom `jetson-device-plugin` (~130 lines Go) at
+`plugins/jetson-device-plugin/`. It returns `CDIDevices: [{Name: "nvidia.com/gpu=0"}]`
+in every `AllocateResponse`, which containerd correctly processes.
+
+#### Bug C — CDI spec rejected: `containerEdits` must be object, not array
+
+The CDI spec writer initially emitted `containerEdits: []` at the spec root. containerd's
+CDI parser unmarshals this field as a `ContainerEdits` struct — a YAML array causes:
+
+```
+CDI device injection failed: unresolvable CDI devices nvidia.com/gpu=0
+```
+
+**Fix**: Removed the `echo 'containerEdits: []'` line. The field is optional and defaults
+to empty when omitted.
+
+#### Bug D — CDI rejects symlinks as device nodes; `/dev/nvhost-ctrl` missing in container
+
+Two related issues in the device node list:
+1. `/dev/nvhost-ctrl` on the host is a symlink → `/dev/nvgpu/igpu0/ctrl`. containerd CDI
+   validates that listed device nodes are real char/block devices and rejects symlinks:
+   ```
+   failed to stat CDI host device "/dev/nvhost-ctrl": not a device node
+   ```
+2. Even after removing it from the list, `/dev/nvhost-ctrl` was absent inside the container.
+   JetPack 6 `libcuda.so.1.1` opens this path during `cuInit`:
+   ```
+   cuda driver library init failure: 801
+   ```
+
+**Fix**: Added `[ ! -L "${dev}" ]` guard in the device loop to skip all symlinks. Added
+a separate explicit entry using the `hostPath` field:
+```sh
+printf '        - path: /dev/nvhost-ctrl\n          hostPath: /dev/nvgpu/igpu0/ctrl\n          permissions: rw\n'
+```
+This injects the real device node at `/dev/nvgpu/igpu0/ctrl` as `/dev/nvhost-ctrl` inside
+the container — exactly what `libcuda.so.1.1` needs.
+
 ---
 
 ## 13. Running Ollama with GPU Acceleration
@@ -1329,18 +1405,26 @@ Pod spec:
   resources.limits.nvidia.com/gpu: "1"
           │
           ▼
-  nvidia-device-plugin (squat/generic-device-plugin)
-  AllocateResponse → CDI device ID "nvidia.com/gpu=0"
-          │
+  jetson-device-plugin (custom CDI-native device plugin)
+  AllocateResponse → CDIDevices: [{Name: "nvidia.com/gpu=0"}]
+          │    (passed via CRI CDIDevices field — the ONLY mechanism in containerd 2.x)
           ▼
   containerd 2.x reads /var/run/cdi/nvidia-jetson.yaml (CDI spec)
   Automatically injects into container:
-    • /dev/nvgpu/igpu0/* device nodes
+    • /dev/nvgpu/igpu0/* device nodes  (real char devices only, no symlinks)
+    • /dev/nvhost-ctrl  (injected via hostPath: /dev/nvgpu/igpu0/ctrl)
     • /dev/nvhost-* device nodes
     • /dev/nvmap
     • /var/lib/nvidia-tegra-libs/tegra → /usr/lib/aarch64-linux-gnu/nvidia (bind)
     • LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:...
 ```
+
+> **Why a custom device plugin?**
+> `squat/generic-device-plugin` has no CDI support — it never returns `CDIDevices` in
+> `AllocateResponse`. containerd 2.x **removed** pod annotation CDI support
+> (`cdi.k8s.io/gpu0`). The only path that works is CRI `CDIDevices` field, which requires
+> a custom ~130-line Go plugin (`plugins/jetson-device-plugin/`). See
+> [Bug Fix #7](#127-cdi-stack-bugs-containerd-2x-custom-device-plugin) for details.
 
 The CDI spec and all system-level setup (firmware copy, device symlinks, lib restore)
 are handled by the `nvidia-cdi-setup` DaemonSet that runs at `system-node-critical`
@@ -1391,13 +1475,28 @@ kubectl --kubeconfig $KC exec -n nvidia-system \
     -o jsonpath='{.items[0].metadata.name}') \
   -- cat /var/run/cdi/nvidia-jetson.yaml
 
-# Device plugin logs
+# Device plugin logs (custom jetson-device-plugin)
 kubectl --kubeconfig $KC logs -n nvidia-system -l app=nvidia-device-plugin
 
 # CDI setup logs
 kubectl --kubeconfig $KC logs -n nvidia-system -l app=nvidia-cdi-setup -c cdi-writer
 kubectl --kubeconfig $KC logs -n nvidia-system -l app=nvidia-cdi-setup -c restore-libs
+
+# Verify CDI injection reached containerd (look for "CDI devices from CRI Config.CDIDevices")
+talosctl logs cri 2>/dev/null | grep -i "CDI devices"
+# Expected: CDI devices from CRI Config.CDIDevices: [nvidia.com/gpu=0]
+# (NOT from annotations — annotations are not processed by containerd 2.x)
 ```
+
+#### Known Non-Fatal Warnings (Boot Log)
+
+These appear on every boot and are harmless:
+
+| Message | Source | Impact |
+|---|---|---|
+| `UBSAN: array-index-out-of-bounds in hal/netlist/netlist.c:617` | nvgpu 5.x GA10B init | None — GPU init completes normally |
+| `devfreq_add_device: Unable to find governor for nvgpu` | Missing `CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND` | GPU runs at fixed max clock (918 MHz), no dynamic scaling |
+| `Error: Can't initialize nvrm channel` | nvgpu channel init sequence | None — channels work after this |
 
 ---
 
