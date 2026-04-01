@@ -86,11 +86,12 @@ machine:
         # with no entries (only "Reboot Into Firmware Interface" visible → boot loop).
         # The firmware_class.path=/usr/lib/firmware cmdline is already embedded in the
         # UKI inside the custom-installer image by the imager profile — do NOT set this.
-        extensions:
-            - image: 10.0.10.24:5001/kernel-modules-clang:1.1.0-6.18.18-talos
-            - image: 10.0.10.24:5001/nvidia-tegra-nvgpu:5.0.0-6.18.18-talos
-            - image: 10.0.10.24:5001/nvidia-firmware-ext:v4
-        
+        # NOTE: Extensions are NOT listed here — they are baked into the custom-installer
+        # image and loaded from there. Listing them here triggered the deprecated
+        # install.extensions validation warning in Talos v1.12. The extensions are already
+        # embedded in the UKI via the imager profile (kernel-modules-clang, nvidia-tegra-nvgpu,
+        # nvidia-firmware-ext). See scripts/01-build-uki.sh for the imager profile.
+
         # # Look up disk using disk attributes like model, size, serial and others.
         # diskSelector:
         #     size: 4GB # Disk size.

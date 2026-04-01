@@ -11,8 +11,8 @@ TALOS_VERSION="${TALOS_VERSION:-v1.12.6}"
 KERNEL_VERSION="${KERNEL_VERSION:-6.18.18}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.0.0}"          # 1.0.0 / 2.0.0 / 3.0.0 / 4.0.0 / 5.0.0
-FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v4}"        # v1 / v2 / v3 / v4
+NVGPU_VERSION="${NVGPU_VERSION:-5.1.0}"          # 1.0.0 / 2.0.0 / 3.0.0 / 4.0.0 / 5.0.0 / 5.1.0 (devfreq fix)
+FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.1.0}"
 
 # ── Derived image tags ───────────────────────────────────────────────────────

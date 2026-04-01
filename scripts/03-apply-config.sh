@@ -8,11 +8,15 @@
 # Usage:
 #   # Fresh install (maintenance mode):
 #   ./scripts/03-apply-config.sh --insecure
+#   # → After bootstrap, run: ./scripts/04-fix-nvme-boot.sh
 #
 #   # Update running node:
 #   ./scripts/03-apply-config.sh
+#   # → 04-fix-nvme-boot.sh runs AUTOMATICALLY after config is applied.
 #
-# After a fresh install, run 04-fix-nvme-boot.sh to copy the full UKI to NVMe.
+# WHY: apply-config silently replaces the NVMe EFI UKI with a build that has
+# a different signing key than our extensions (module.sig_enforce=1 → maintenance mode).
+# 04-fix-nvme-boot.sh restores the correct USB UKI to both NVMe EFI locations.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
@@ -45,3 +49,13 @@ until talosctl --talosconfig "${TALOSCONFIG_PATH}" \
 done
 echo ""
 info "Node is back online."
+
+# ── Auto-fix NVMe boot after config update ────────────────────────────────────
+# apply-config replaces the NVMe EFI UKI with a fresh random-signing-key build.
+# Restore the correct UKI and EFI boot order automatically.
+if [[ "${INSECURE}" != "--insecure" ]]; then
+  info "Auto-running 04-fix-nvme-boot.sh to restore correct NVMe UKI..."
+  bash "$(dirname "$0")/04-fix-nvme-boot.sh"
+else
+  warn "Fresh install mode: run './scripts/04-fix-nvme-boot.sh' AFTER bootstrapping the cluster."
+fi
