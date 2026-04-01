@@ -1280,30 +1280,43 @@ allowing the module to build and load. Code paths that dereference these symbols
 produce a kernel oops at runtime, but standard CUDA compute workloads on Jetson Orin NX
 with a standard device tree do not invoke them.
 
-### 12.7 devfreq Governor Missing (`nvgpu_scaling` not found)
+### 12.7 devfreq Governor Missing (`nvhost_podgov` not found)
 
 **Symptom**: dmesg shows during GPU power-on:
 ```
-devfreq_add_device: Unable to find governor for the device
+gk20a 17000000.gpu: devfreq_add_device: Unable to find governor for the device
 ```
 
-**Root cause**: The OE4T nvgpu source code hard-codes the devfreq governor name as
-`"nvgpu_scaling"` in `platform_ga10b_tegra.c`. This governor is L4T-specific and
-not compiled into the Talos Linux kernel. The standard `simple_ondemand` governor
-is compiled in (`CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y` in Talos 6.18.18), but nvgpu
-does not request it by name.
+**Root cause**: OE4T `platform_ga10b_tegra.c` (commit `d530a48`, patches-r36.5) hard-codes
+the devfreq governor as `"nvhost_podgov"` — the NVIDIA Pod Scaling governor from
+`linux-nv-oot/drivers/devfreq/governor_pod_scaling.c`. This is an nvidia-oot module
+never loaded in Talos. Older OE4T commits used `"nvgpu_scaling"` instead (same problem).
 
-The error is harmless in nvgpu 5.0.0 (GPU runs at fixed 918 MHz / maximum frequency),
-but is fixed properly in 5.1.0.
+The error is **non-fatal** — the GPU initializes and runs at fixed maximum clock (918 MHz),
+but dynamic frequency scaling is inactive.
 
-**Fix** (applied in **nvgpu 5.1.0**): Patch `platform_ga10b_tegra.c` before compilation:
+> **Note**: The original patch in `pkg.yaml` searched for `"nvgpu_scaling"` but the OE4T
+> d530a48 source actually contains `"nvhost_podgov"` — so the patch hit its WARNING branch
+> and did nothing. Boot log confirmed: `WARNING: nvgpu_scaling not found in
+> platform_ga10b_tegra.c`. Fixed in `pkg.yaml` to target `"nvhost_podgov"` first.
+
+**Fix** (applied in **pkg.yaml**, requires nvgpu rebuild):
 ```bash
 GA10B="/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/platform_ga10b_tegra.c"
-sed -i 's/"nvgpu_scaling"/"simple_ondemand"/g' "$GA10B"
+# OE4T d530a48 uses "nvhost_podgov"; older OE4T uses "nvgpu_scaling"
+sed -i 's/"nvhost_podgov"/"simple_ondemand"/g' "$GA10B"
 ```
 
-This replaces the hard-coded `"nvgpu_scaling"` string with `"simple_ondemand"` so nvgpu
-requests a governor that actually exists in the Talos kernel.
+After the fix, GPU devfreq registers successfully with `simple_ondemand`
+(`CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y` in Talos 6.18.18 kernel).
+
+**To apply**: rebuild nvgpu extension and UKI:
+```bash
+./scripts/09-build-nvgpu.sh          # ~60 min — patches nvhost_podgov → simple_ondemand
+./scripts/01-build-uki.sh
+./scripts/02-build-usb-image.sh
+./scripts/03-apply-config.sh --insecure   # after flashing new USB image
+```
 
 ### 12.8 CDI Stack Bugs — containerd 2.x + Custom Device Plugin
 
