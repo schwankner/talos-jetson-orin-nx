@@ -85,20 +85,20 @@ embedded in the running kernel. See [Section 11.2](#112-kernel-module-signing) f
 
 # 2. Build bootable USB image and flash to USB drive
 ./scripts/02-build-usb-image.sh
-sudo dd if=dist/talos-usb-nvgpu5.0.0.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/rdiskN bs=4m && sync
 
 # 3. Boot Jetson from USB, wipe NVMe STATE, enter maintenance mode
 #    Then apply machine config (installs Talos to NVMe):
 ./scripts/03-apply-config.sh --insecure
 
-# 4. Fix NVMe boot (copy full 149MB UKI to NVMe EFI partition)
+# 4. Fix NVMe boot (copy full UKI to NVMe EFI partition, set boot order)
 ./scripts/04-fix-nvme-boot.sh
 
 # 5. Bootstrap etcd and save credentials (run ONCE per fresh install)
 ./scripts/05-bootstrap-cluster.sh
 
-# 6. Install JetPack r36.5 userspace libs for Ollama GPU support
-./scripts/07-install-l4t-libs.sh
+# 6. Deploy gpu-libs-restore DaemonSet (auto-restores JetPack libs on every boot)
+kubectl apply -f gpu-libs-restore.yaml
 
 # 7. Deploy Ollama and pull model
 ./scripts/06-deploy-ollama.sh
@@ -107,14 +107,14 @@ sudo dd if=dist/talos-usb-nvgpu5.0.0.raw of=/dev/rdiskN bs=4m && sync
 ### Day-2 Operations
 
 ```bash
-# Update machine config on running node:
+# Update machine config on running node (auto-calls 04-fix-nvme-boot.sh):
 ./scripts/03-apply-config.sh
 
-# After any upgrade/reinstall — re-fix NVMe boot:
+# Manually re-fix NVMe EFI + boot order (also called automatically by 03):
 ./scripts/04-fix-nvme-boot.sh
 
-# Re-install JetPack libs (lost after full wipe):
-./scripts/07-install-l4t-libs.sh
+# Deploy gpu-libs-restore DaemonSet (auto-restores JetPack libs after wipe):
+kubectl apply -f gpu-libs-restore.yaml
 
 # Test a different nvgpu extension version (for GPU debugging):
 NVGPU_VERSION=3.0.0 FIRMWARE_EXT_TAG=v3 ./scripts/08-test-nvgpu.sh
@@ -126,10 +126,10 @@ NVGPU_VERSION=3.0.0 FIRMWARE_EXT_TAG=v3 ./scripts/08-test-nvgpu.sh
 # .gitlab-ci.yml / GitHub Actions equivalent
 build-uki:
   script:
-    - NVGPU_VERSION=4.0.0 FIRMWARE_EXT_TAG=v4 ./scripts/01-build-uki.sh
+    - NVGPU_VERSION=5.1.0 FIRMWARE_EXT_TAG=v5 ./scripts/01-build-uki.sh
   artifacts:
     paths:
-      - dist/uki-nvgpu4.0.0/metal-arm64-uki.efi
+      - dist/uki-nvgpu5.1.0/metal-arm64-uki.efi
 
 build-usb:
   needs: [build-uki]
@@ -137,7 +137,7 @@ build-usb:
     - ./scripts/02-build-usb-image.sh
   artifacts:
     paths:
-      - dist/talos-usb-nvgpu4.0.0.raw
+      - dist/talos-usb-nvgpu5.1.0.raw
 ```
 
 ---
@@ -171,9 +171,9 @@ siderolabs/pkgs (commit a92bed5, branch release-1.12)
                               │         (10.0.10.24:5001)           │
                               │                                     │
                               │  custom-installer:v1.12.6-6.18.18  │
-                              │  nvidia-tegra-nvgpu:4.0.0-...      │
+                              │  nvidia-tegra-nvgpu:5.1.0-...      │
                               │  kernel-modules-clang:1.1.0-...    │
-                              │  nvidia-firmware-ext:v4            │
+                              │  nvidia-firmware-ext:v5            │
                               └──────────────┬──────────────────────┘
                                              │
                                              ▼
@@ -287,7 +287,8 @@ jetson-test/                         ← git repository root
 ├── kubeconfig                       ← !! gitignored — kubectl PKI credentials
 │
 ├── imager-profiles/                 ← Parameterized imager profiles (committed)
-│   ├── uki-nvgpu4.yaml              ← Stable UKI (nvgpu 4.0.0, firmware v4)
+│   ├── uki-nvgpu5.yaml              ← Current UKI (nvgpu 5.1.0, firmware v5)
+│   ├── uki-nvgpu4.yaml              ← Legacy UKI (nvgpu 4.0.0, firmware v4)
 │   └── uki-nvgpu3.yaml              ← Test UKI (nvgpu 3.0.0, firmware v3)
 │
 ├── scripts/                         ← Reproducible build + deploy scripts (committed)
@@ -298,15 +299,17 @@ jetson-test/                         ← git repository root
 │   ├── 04-fix-nvme-boot.sh          ← Copy working UKI to NVMe EFI partition
 │   ├── 05-bootstrap-cluster.sh      ← Bootstrap etcd + retrieve credentials
 │   ├── 06-deploy-ollama.sh          ← Deploy Ollama + pull model
-│   ├── 07-install-l4t-libs.sh       ← Download JetPack r36.5 libs via K8s Job
+│   ├── 07-install-l4t-libs.sh       ← [LEGACY] Download JetPack libs via K8s Job (replaced by gpu-libs-restore DaemonSet)
 │   └── 08-test-nvgpu.sh             ← Build + deploy UKI with different nvgpu version
 │
+├── gpu-libs-restore.yaml            ← DaemonSet: auto-restore JetPack libs after full wipe
+│
 ├── logs/                            ← UART debug logs from boot sessions (committed)
-│   └── uart-run-1..5.log
+│   └── uart-run-1..9.log
 │
 └── dist/                            ← !! gitignored — build outputs
-    └── uki-nvgpu4.0.0/
-        └── metal-arm64-uki.efi      ← 149 MB UKI (built by 01-build-uki.sh)
+    └── uki-nvgpu5.1.0/
+        └── metal-arm64-uki.efi      ← UKI (built by 01-build-uki.sh)
 ```
 
 > **Credentials**: `talosconfig` and `kubeconfig` contain TLS private keys and are
@@ -363,11 +366,11 @@ curl http://10.0.10.24:5001/v2/_catalog
 | OE4T linux-nvgpu | `d530a48` | patches-r36.5 |
 | OE4T linux-nv-oot | `ea32e7f` | NVIDIA OOT framework |
 | LLVM/Clang image | `ghcr.io/siderolabs/llvm:v1.14.0-alpha.0` | |
-| `nvidia-tegra-nvgpu` | **4.0.0-6.18.18-talos** | Current extension |
+| `nvidia-tegra-nvgpu` | **5.1.0-6.18.18-talos** | devfreq governor patched: `nvgpu_scaling` → `simple_ondemand` |
 | `kernel-modules-clang` | **1.1.0-6.18.18-talos** | Current extension |
-| `nvidia-firmware-ext` | **v4** | Firmware at `/usr/lib/firmware/ga10b/` |
+| `nvidia-firmware-ext` | **v5** | Adds `pmu_pkc_prod_sig.bin` at `ga10b/` (was missing in v4) |
 | `custom-installer` | **v1.12.6-6.18.18** | Official installer + custom vmlinuz |
-| UKI build | **v8** (imager-out-v8/) | 149 MB — definitive |
+| UKI build | **v9** | Built with nvgpu 5.1.0 + firmware-ext v5 |
 
 ---
 
@@ -437,17 +440,22 @@ is in place. Keys are persisted in `keys/` and committed to the repository.
 
 Contains: `nvgpu.ko`, `host1x.ko`, and supporting modules for the Jetson Orin NX GPU.
 
+**Current version**: 5.1.0 — includes devfreq governor patch (`nvgpu_scaling` → `simple_ondemand`)
+applied via `sed` in `nvidia-tegra-nvgpu/pkg.yaml` before compilation.
+
 #### Build from pkgs
 
 ```bash
+cd /tmp/talos-pkgs   # siderolabs/pkgs at commit a92bed5
 docker buildx build \
   --builder talos-builder \
   --file Pkgfile \
   --target nvidia-tegra-nvgpu \
   --platform linux/arm64 \
-  --progress plain \
-  --output type=local,dest=/tmp/nvgpu-output \
-  .
+  --output "type=local,dest=/tmp/nvgpu-5.1.0-output" \
+  . > /tmp/nvgpu-build-5.1.0.log 2>&1 &
+# Takes ~60 min (full kernel rebuild required if cache was cleared)
+# Monitor: tail -f /tmp/nvgpu-build-5.1.0.log
 ```
 
 #### Package as OCI Extension Image
@@ -459,9 +467,9 @@ cat > /tmp/nvgpu-ext/manifest.yaml << 'EOF'
 version: v1alpha1
 metadata:
   name: nvidia-tegra-nvgpu
-  version: 4.0.0-6.18.18-talos
+  version: 5.1.0-6.18.18-talos
   author: custom-build
-  description: NVIDIA nvgpu GPU driver for Jetson Orin NX (OE4T patches-r36.5, Clang build)
+  description: NVIDIA nvgpu GPU driver for Jetson Orin NX (OE4T patches-r36.5, Clang build, devfreq fix)
   compatibility:
     talos:
       version: ">= 1.12.6"
@@ -473,10 +481,10 @@ COPY manifest.yaml /manifest.yaml
 COPY rootfs /rootfs
 EOF
 
-cp -r /tmp/nvgpu-output/rootfs /tmp/nvgpu-ext/rootfs
+cp -r /tmp/nvgpu-5.1.0-output/rootfs /tmp/nvgpu-ext/rootfs
 
 docker buildx build --platform linux/arm64 \
-  -t host.docker.internal:5001/nvidia-tegra-nvgpu:4.0.0-6.18.18-talos \
+  -t host.docker.internal:5001/nvidia-tegra-nvgpu:5.1.0-6.18.18-talos \
   --push /tmp/nvgpu-ext/
 ```
 
@@ -520,36 +528,49 @@ The GA10B GPU requires firmware blobs to be present at `/usr/lib/firmware/ga10b/
 > **Critical path**: Files must be at `/usr/lib/firmware/ga10b/` (v4 fix).
 > Earlier versions used `/usr/lib/firmware/nvidia/ga10b/` which caused ELOOP failures.
 > See [Section 11.1](#111-firmware-eloop-error) for the full root-cause analysis.
+>
+> **v5 adds `pmu_pkc_prod_sig.bin`** which was missing from v4 (lived at `nvidia/ga10b/` in
+> the deb but the extension mounts at `ga10b/`). Without it, nvgpu panics the kernel on GPU
+> power-on. The v5 Dockerfile downloads and places it correctly.
+
+**Current version: v5** — Build with:
+
+```bash
+mkdir -p /tmp/fw-ext-v5
+cat > /tmp/fw-ext-v5/Dockerfile << 'EOF'
+# syntax=docker/dockerfile:1
+# Stage 1: Download pmu_pkc_prod_sig.bin from NVIDIA APT
+FROM --platform=linux/amd64 ubuntu:22.04 AS downloader
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl dpkg ca-certificates
+RUN BASE="https://repo.download.nvidia.com/jetson/t234/pool/main/n" && \
+    VER="36.5.0-20260115194252" && \
+    curl -fsSL -o /tmp/l4t-fw.deb \
+      "${BASE}/nvidia-l4t-firmware/nvidia-l4t-firmware_${VER}_arm64.deb" && \
+    dpkg-deb -x /tmp/l4t-fw.deb /tmp/fw-extract/
+
+# Stage 2: Extend v4 with the missing PKC signature file
+FROM host.docker.internal:5001/nvidia-firmware-ext:v4
+COPY --from=downloader \
+  /tmp/fw-extract/lib/firmware/nvidia/ga10b/pmu_pkc_prod_sig.bin \
+  /rootfs/usr/lib/firmware/ga10b/pmu_pkc_prod_sig.bin
+EOF
+
+docker buildx build \
+  --builder talos-builder \
+  --platform linux/arm64 \
+  -t host.docker.internal:5001/nvidia-firmware-ext:v5 \
+  --push /tmp/fw-ext-v5/
+```
+
+> **Note**: Requires `talos-builder` with insecure registry support (see Section 6.1).
+> The `host.docker.internal:5001` registry must be configured in `/tmp/buildkitd.toml`.
+
+**Legacy v4 build** (for reference):
 
 ```bash
 mkdir -p /tmp/nvidia-firmware-v4
-
-# Copy firmware blobs from JetPack r36.5 L4T tarball:
-#   /lib/firmware/ga10b/   → /rootfs/usr/lib/firmware/ga10b/
-#   /lib/firmware/tegra23x/ → /rootfs/usr/lib/firmware/tegra23x/
-#   /lib/firmware/nvidia/ga10b/ → /rootfs/usr/lib/firmware/nvidia/ga10b/ (legacy compat)
-
-cat > /tmp/nvidia-firmware-v4/manifest.yaml << 'EOF'
-version: v1alpha1
-metadata:
-  name: nvidia-firmware-ext
-  version: 1.0.0-r36.5
-  author: talos-jetson-build
-  description: NVIDIA Jetson Orin firmware files (GA10B GPU, tegra23x) from JetPack r36.5
-  compatibility:
-    talos:
-      version: ">= 1.12.6"
-EOF
-
-cat > /tmp/nvidia-firmware-v4/Dockerfile << 'EOF'
-FROM scratch
-COPY rootfs /rootfs
-COPY manifest.yaml /manifest.yaml
-EOF
-
-docker buildx build --platform linux/arm64 \
-  -t host.docker.internal:5001/nvidia-firmware-ext:v4 \
-  --push /tmp/nvidia-firmware-v4/
+# Copy firmware blobs from JetPack r36.5 L4T tarball...
+# (See git history for full v4 build commands)
 ```
 
 ### 6.6 Custom Installer Image
@@ -585,7 +606,7 @@ Output: `dist/uki-nvgpu<VERSION>/metal-arm64-uki.efi` (≈148 MB)
 ```bash
 ./scripts/01-build-uki.sh
 # or with custom version:
-NVGPU_VERSION=5.0.0 ./scripts/01-build-uki.sh
+NVGPU_VERSION=5.1.0 ./scripts/01-build-uki.sh
 ```
 
 **What the script does**:
@@ -625,9 +646,9 @@ input:
   systemExtensions:
     - imageRef: host.docker.internal:5001/kernel-modules-clang:1.1.0-6.18.18-talos
       forceInsecure: true
-    - imageRef: host.docker.internal:5001/nvidia-tegra-nvgpu:5.0.0-6.18.18-talos
+    - imageRef: host.docker.internal:5001/nvidia-tegra-nvgpu:5.1.0-6.18.18-talos
       forceInsecure: true
-    - imageRef: host.docker.internal:5001/nvidia-firmware-ext:v4
+    - imageRef: host.docker.internal:5001/nvidia-firmware-ext:v5
       forceInsecure: true
 customization:
   extraKernelArgs:
@@ -649,7 +670,7 @@ the Jetson UEFI firmware will boot it automatically without any boot menu select
 ```bash
 ./scripts/02-build-usb-image.sh
 # or with custom version:
-NVGPU_VERSION=5.0.0 ./scripts/02-build-usb-image.sh
+NVGPU_VERSION=5.1.0 ./scripts/02-build-usb-image.sh
 ```
 
 Output: `dist/talos-usb-nvgpu<VERSION>.raw` (≈150 MB)
@@ -664,13 +685,13 @@ Colima — loop device partitions `/dev/loopNp1` are not accessible from inside 
 diskutil list
 
 # Flash (replace N with disk number — be very careful!)
-sudo dd if=dist/talos-usb-nvgpu5.0.0.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/rdiskN bs=4m && sync
 ```
 
 **Flash to USB drive** (Linux):
 
 ```bash
-sudo dd if=dist/talos-usb-nvgpu5.0.0.raw of=/dev/sdX bs=4M status=progress && sync
+sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
 ---
@@ -865,13 +886,14 @@ kubectl delete pod fix-nvme-uki -n default
 > `Boot0009` ("Talos Linux UKI") which loads `EFI/BOOT/BOOTAA64.efi` on nvme0n1p1
 > (= the correct full UKI with all extensions). USB serves as fallback only.
 
-> **IMPORTANT — do NOT run `apply-config` or `talosctl upgrade` after this fix**
-> without immediately re-running the UKI copy step. Both commands silently overwrite
-> the NVMe UKI with a mismatched-signing-key version and break NVMe boot again.
+> **Note on `apply-config`**: `./scripts/03-apply-config.sh` now automatically calls
+> `04-fix-nvme-boot.sh` after every non-insecure apply. For `talosctl upgrade`, run
+> `./scripts/04-fix-nvme-boot.sh` manually afterwards.
 
-> **Long-term fix**: modify the `custom-installer` image to generate a reproducible
-> signing key (embedded in the image), so all UKIs built from it share the same key
-> regardless of when they are built. Then `apply-config` can no longer break NVMe boot.
+> **Permanent fix implemented**: The `custom-installer` image uses a **reproducible signing
+> key** committed at `keys/signing_key.pem` (fingerprint: `74FD747A...`). All UKIs built
+> from this installer share the same signing key. The `apply-config` signing-key mismatch
+> issue is fully resolved.
 
 ---
 
@@ -896,10 +918,10 @@ machine:
     extensions:
       # Clang-compiled kernel modules (replaces GCC-compiled defaults)
       - image: 10.0.10.24:5001/kernel-modules-clang:1.1.0-6.18.18-talos
-      # NVIDIA GPU driver (nvgpu.ko, host1x.ko)
-      - image: 10.0.10.24:5001/nvidia-tegra-nvgpu:4.0.0-6.18.18-talos
-      # GA10B firmware blobs at /usr/lib/firmware/ga10b/
-      - image: 10.0.10.24:5001/nvidia-firmware-ext:v4
+      # NVIDIA GPU driver (nvgpu.ko, host1x.ko) — 5.1.0 adds devfreq governor fix
+      - image: 10.0.10.24:5001/nvidia-tegra-nvgpu:5.1.0-6.18.18-talos
+      # GA10B firmware blobs at /usr/lib/firmware/ga10b/ — v5 adds pmu_pkc_prod_sig.bin
+      - image: 10.0.10.24:5001/nvidia-firmware-ext:v5
 
   registries:
     mirrors:
@@ -926,13 +948,12 @@ cluster:
 
 ### Current USB Image
 
-**Location**: `/tmp/talos-usb-v3/talos-usb-v3.raw` (4.0 GB raw) or
-`/tmp/talos-usb-v3/talos-usb-v3.raw.xz` (740 MB compressed)
+**Location**: `dist/talos-usb-nvgpu5.1.0.raw` (built by `./scripts/02-build-usb-image.sh`)
 
 The image contains:
-- **1 boot entry only**: `talos-v8.efi` (149 MB UKI with all NVIDIA extensions embedded)
-- **systemd-boot**: 3-second timeout, auto-boots `talos-v8.efi`
-- **Extensions**: kernel-modules-clang 1.1.0, nvidia-tegra-nvgpu 4.0.0, nvidia-firmware-ext v4
+- **1 boot entry only**: UKI with all NVIDIA extensions embedded
+- **systemd-boot**: 3-second timeout, auto-boots the UKI
+- **Extensions**: kernel-modules-clang 1.1.0, nvidia-tegra-nvgpu 5.1.0, nvidia-firmware-ext v5
 - **Kernel cmdline**: `firmware_class.path=/usr/lib/firmware console=ttyTCU0,115200`
 
 ### Flash Command
@@ -1191,26 +1212,71 @@ allowing the module to build and load. Code paths that dereference these symbols
 produce a kernel oops at runtime, but standard CUDA compute workloads on Jetson Orin NX
 with a standard device tree do not invoke them.
 
+### 11.7 devfreq Governor Missing (`nvgpu_scaling` not found)
+
+**Symptom**: dmesg shows during GPU power-on:
+```
+devfreq_add_device: Unable to find governor for the device
+```
+
+**Root cause**: The OE4T nvgpu source code hard-codes the devfreq governor name as
+`"nvgpu_scaling"` in `platform_ga10b_tegra.c`. This governor is L4T-specific and
+not compiled into the Talos Linux kernel. The standard `simple_ondemand` governor
+is compiled in (`CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y` in Talos 6.18.18), but nvgpu
+does not request it by name.
+
+The error is harmless in nvgpu 5.0.0 (GPU runs at fixed 918 MHz / maximum frequency),
+but is fixed properly in 5.1.0.
+
+**Fix** (applied in **nvgpu 5.1.0**): Patch `platform_ga10b_tegra.c` before compilation:
+```bash
+GA10B="/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/platform_ga10b_tegra.c"
+sed -i 's/"nvgpu_scaling"/"simple_ondemand"/g' "$GA10B"
+```
+
+This replaces the hard-coded `"nvgpu_scaling"` string with `"simple_ondemand"` so nvgpu
+requests a governor that actually exists in the Talos kernel.
+
 ---
 
 ## 12. Running Ollama with GPU Acceleration
 
 > **Status**: ✅ **GPU acceleration is working!**
-> Ollama runs with `library=cuda variant=jetpack6` on the GA10B GPU (nvgpu 5.0.0).
+> Ollama runs with `library=cuda variant=jetpack6` on the GA10B GPU (nvgpu 5.1.0).
 > All 29 model layers are offloaded to CUDA. Observed performance with `qwen2.5:1.5b`:
 > - **Decode (generation)**: ~7–8 tok/s (GPU @ 918 MHz, memory-bandwidth bound)
 > - **Prefill (prompt processing)**: ~460 tok/s (full GPU parallelism)
 >
-> Previously blocked by two firmware issues now fixed — see "GPU Acceleration Status" below.
+> Previously blocked by firmware and library issues — all now fixed automatically after cluster rebuild.
 
-### Step 1 — Download Real JetPack Userspace Libraries
+### Step 1 — Deploy gpu-libs-restore DaemonSet (replaces manual Job)
 
 The `dustynv/ollama` container carries **0-byte stub libraries** for the NVIDIA CUDA
-userspace (see Issue 1 below). Before deploying Ollama, these stubs must be replaced with
-real JetPack libraries downloaded from the NVIDIA APT repo and stored on the node.
+userspace (see Issue 1 below). Real JetPack r36.5 libraries must be present at
+`/var/lib/nvidia-tegra-libs/tegra/` on the node before Ollama can start.
 
-**This must be re-run after every full cluster rebuild** (the libs live in EPHEMERAL at
-`/var/lib/nvidia-tegra-libs/` which is wiped by `--wipe-mode all`).
+**As of this project, the `gpu-libs-restore` DaemonSet handles this automatically.**
+It runs on every node boot, checks if `libcuda.so.1.1` is present and real (>1 MB),
+and downloads from NVIDIA APT only if needed.
+
+```bash
+KC=~/PycharmProjects/jetson-test/kubeconfig
+
+# Create namespace first
+kubectl --kubeconfig $KC create namespace ollama 2>/dev/null || true
+kubectl --kubeconfig $KC label namespace ollama \
+  pod-security.kubernetes.io/enforce=privileged --overwrite
+
+# Deploy the DaemonSet (included in repo as gpu-libs-restore.yaml)
+kubectl --kubeconfig $KC apply -f gpu-libs-restore.yaml
+kubectl --kubeconfig $KC wait --for=condition=Ready pod -l app=gpu-libs-restore \
+  -n ollama --timeout=300s
+kubectl --kubeconfig $KC logs -n ollama -l app=gpu-libs-restore -c restore-libs
+```
+
+Expected output: `Done. 57 libs installed.` (first run) or `JetPack r36.5 libs already present` (subsequent runs).
+
+**Legacy manual Job** (kept for reference, replaced by DaemonSet above):
 
 ```bash
 KC=~/PycharmProjects/jetson-test/kubeconfig
@@ -1461,14 +1527,15 @@ operation but prevents any compute channel from being opened.
 
 | Layer | Component | Status | Notes |
 |---|---|---|---|
-| Kernel module | nvgpu loaded | ✅ | syncpt init succeeds (nvgpu 5.0.0) |
+| Kernel module | nvgpu loaded | ✅ | syncpt init succeeds (nvgpu 5.1.0) |
 | Kernel module | `/dev/nvgpu/igpu0/ctrl` device | ✅ | present, openable |
 | Kernel module | `/dev/nvhost-ctrl` symlink | ✅ | created by Ollama initContainer |
 | Kernel module | GPU power-on / netlist init | ✅ | fully succeeds with correct firmware |
+| Kernel module | devfreq governor | ✅ | `simple_ondemand` (patched in nvgpu 5.1.0) |
 | Firmware | `gpmu_ucode_next_prod_image.bin` | ✅ | loaded from `/var/fw-fresh/ga10b/` (NVMe) |
-| Firmware | `pmu_pkc_prod_sig.bin` | ✅ | downloaded from nvidia-l4t-firmware r36.5 deb |
+| Firmware | `pmu_pkc_prod_sig.bin` | ✅ | in `nvidia-firmware-ext:v5`, auto-copied to `/var/fw-fresh/ga10b/` |
 | Firmware | ACR / FECS / GPCCS blobs | ✅ | present in `/var/fw-fresh/ga10b/` |
-| Userspace | JetPack r36.5 libs (real) | ✅ | installed via Job, mounted via hostPath |
+| Userspace | JetPack r36.5 libs (real) | ✅ | auto-restored by `gpu-libs-restore` DaemonSet |
 | Userspace | `cuInit(0)` | ✅ | succeeds — GPU detected: SM 8.7, 15.3 GiB |
 | Application | Ollama serve | ✅ | GPU inference, 29/29 layers on CUDA0 |
 
@@ -1513,54 +1580,26 @@ The file lives at `lib/firmware/nvidia/ga10b/` in the `nvidia-l4t-firmware` deb 
 but the firmware extension mounts at `lib/firmware/ga10b/` (without the `nvidia/` prefix),
 so the file is effectively invisible to nvgpu's search path.
 
-**Fix**: Download `pmu_pkc_prod_sig.bin` from the NVIDIA L4T r36.5 firmware package and
-place it in `/var/fw-fresh/ga10b/`:
+**Fix (as of nvidia-firmware-ext v5)**: `pmu_pkc_prod_sig.bin` is now **baked directly into
+the `nvidia-firmware-ext:v5` system extension** at `/rootfs/usr/lib/firmware/ga10b/`. The Ollama
+initContainer automatically copies it to `/var/fw-fresh/ga10b/` on startup — no separate Job needed.
 
-```bash
-# Run once after each full cluster rebuild (or if /var/fw-fresh is wiped)
-kubectl apply -f - <<'EOF'
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: install-ga10b-firmware
-  namespace: ollama
-spec:
-  ttlSecondsAfterFinished: 300
-  template:
-    spec:
-      restartPolicy: Never
-      tolerations: [{operator: Exists}]
-      containers:
-        - name: install-fw
-          image: ubuntu:22.04
-          command: ["/bin/bash", "-c"]
-          args:
-            - |
-              apt-get update -qq && apt-get install -y -qq curl dpkg
-              BASE="https://repo.download.nvidia.com/jetson/t234/pool/main/n"
-              VER="36.5.0-20260115194252"
-              curl -fsSL -o /tmp/l4t-fw.deb "${BASE}/nvidia-l4t-firmware/nvidia-l4t-firmware_${VER}_arm64.deb"
-              mkdir -p /tmp/fw-extract && dpkg-deb -x /tmp/l4t-fw.deb /tmp/fw-extract/
-              mkdir -p /fw-dest/ga10b
-              cp /tmp/fw-extract/lib/firmware/nvidia/ga10b/* /fw-dest/ga10b/
-              echo "Done. Files: $(ls /fw-dest/ga10b/ | wc -l)"
-          volumeMounts: [{name: fw-dest, mountPath: /fw-dest}]
-      volumes: [{name: fw-dest, hostPath: {path: /var/fw-fresh, type: DirectoryOrCreate}}]
-EOF
-kubectl wait --for=condition=complete job/install-ga10b-firmware -n ollama --timeout=300s
-```
+The v5 extension Dockerfile downloads `pmu_pkc_prod_sig.bin` from NVIDIA APT during image build
+(from `nvidia-l4t-firmware_36.5.0-20260115194252_arm64.deb`, at path `lib/firmware/nvidia/ga10b/`)
+and places it at `ga10b/` (without the `nvidia/` prefix) where nvgpu expects it.
 
-After this Job, `/var/fw-fresh/ga10b/` contains all required firmware:
+After the Ollama initContainer runs, `/var/fw-fresh/ga10b/` contains all required firmware:
 - `gpmu_ucode_next_prod_image.bin` (155 KB)
-- `pmu_pkc_prod_sig.bin` (2.2 KB) ← the critical missing file
+- `pmu_pkc_prod_sig.bin` (2.2 KB) ← the critical missing file, now in firmware-ext v5
 - `acr-gsp.*.prod`, `fecs_*.bin`, `gpccs_*.bin`, NET{A,B,C,D}_img_*.bin, `safety-scheduler.*.prod`
 
 **Persistence**: `/var/fw-fresh/` lives on the NVMe XFS partition (EPHEMERAL) and
-survives node reboots. It is wiped by `--wipe-mode all` — re-run the Job after full rebuilds.
+survives node reboots. It is wiped by `--wipe-mode all` — the initContainer re-copies on next
+Ollama pod start (automatically, from the extension files in the UKI).
 
 #### GPU Status: WORKING ✅
 
-The GPU is fully operational as of nvgpu 5.0.0:
+The GPU is fully operational as of nvgpu 5.1.0:
 - **GPU detected**: Orin GA10B, SM 8.7, compute=8.7, driver=12.6
 - **VRAM**: 15.3 GiB total, 11.7+ GiB available (unified memory with system)
 - **GPU frequency**: 918 MHz (maximum, confirmed via BPMP debugfs `/clk/gpc0clk/rate`)
@@ -1568,8 +1607,10 @@ The GPU is fully operational as of nvgpu 5.0.0:
 - **Flash Attention**: enabled (`OLLAMA_FLASH_ATTENTION=1`)
 - **Non-fatal warning**: `Error: Can't initialize nvrm channel` (logged at startup; does not
   affect inference — GPU channels ARE created, visible in `/sys/kernel/debug/17000000.gpu/status`)
-- **devfreq**: `Unable to find governor` (logged but harmless — GPU runs at 918 MHz anyway,
-  `simple_ondemand` governor not compiled into Talos 6.18.18 kernel)
+- **devfreq**: Fixed in nvgpu 5.1.0 — governor patched from `nvgpu_scaling` (L4T-specific,
+  unavailable in Talos) to `simple_ondemand` (compiled into kernel as `CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y`)
+- **pmu_pkc_prod_sig.bin**: Now included in `nvidia-firmware-ext:v5` — no longer requires manual
+  Job after cluster rebuilds; copied automatically by Ollama initContainer
 
 ---
 
@@ -1736,10 +1777,10 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 | `install.extensions` deprecated in v1.12 | Validation warning | Functional; migrate to overlay installer in future |
 | ~~CUDA GPU acceleration blocked~~ | ~~Fixed in nvgpu 5.0.0~~ | **RESOLVED** — GPU fully working. `cuInit` succeeds; Ollama runs with `library=cuda variant=jetpack6`; 29/29 layers on GPU; ~7–8 tok/s decode, ~460 tok/s prefill. Two firmware fixes required: (1) redirect `firmware_class.path` to NVMe to avoid `-ETXTBSY`, (2) download `pmu_pkc_prod_sig.bin` from NVIDIA APT. See Section 12 Bug 5 & 6. |
 | dustynv Ollama stub libraries | `dustynv/ollama:r36.4.0` carries 0-byte stubs for `libnvrm_gpu.so`, `libcuda.so.1.1` etc. — NVIDIA Container Runtime normally injects real host libs, not present on Talos | Fixed: download real r36.5 libs from NVIDIA APT and mount via hostPath — see Step 1 in Section 12 |
-| JetPack libs lost after full wipe | The real libs in `/var/lib/nvidia-tegra-libs/` live in EPHEMERAL. A `--wipe-mode all` reset deletes them | Re-run the `install-l4t-r365-libs` Job (Section 12 Step 1) after every full cluster rebuild |
-| GPU firmware lost after full wipe | `/var/fw-fresh/ga10b/` (incl. `pmu_pkc_prod_sig.bin`) lives in EPHEMERAL | Re-run `install-ga10b-firmware` Job (Section 12 Bug 6) after every full cluster rebuild |
-| `pmu_pkc_prod_sig.bin` missing from nvidia-firmware-ext | The system extension at `/usr/lib/firmware/ga10b/` is missing this PKC signature file; without it nvgpu panics on GPU init | Long-term fix: add the file to the extension build; workaround: download via Job + redirect `firmware_class.path` |
-| `devfreq` governor missing | Talos 6.18.18 kernel does not include `simple_ondemand` devfreq governor (`CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND` not compiled). nvgpu logs "Unable to find governor". | Harmless: GPU still runs at 918 MHz (maximum). Fix: rebuild kernel with `CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y` |
+| ~~JetPack libs lost after full wipe~~ | ~~The real libs in `/var/lib/nvidia-tegra-libs/` live in EPHEMERAL. A `--wipe-mode all` reset deletes them~~ | **RESOLVED** — `gpu-libs-restore` DaemonSet auto-restores on boot. No manual Job needed. |
+| ~~GPU firmware lost after full wipe~~ | ~~`/var/fw-fresh/ga10b/` (incl. `pmu_pkc_prod_sig.bin`) lives in EPHEMERAL~~ | **RESOLVED** — `pmu_pkc_prod_sig.bin` baked into `nvidia-firmware-ext:v5`; Ollama initContainer copies it automatically. |
+| ~~`pmu_pkc_prod_sig.bin` missing from nvidia-firmware-ext~~ | ~~The system extension at `/usr/lib/firmware/ga10b/` was missing this PKC signature file; without it nvgpu panics on GPU init~~ | **RESOLVED** — Added to `nvidia-firmware-ext:v5` at build time (downloaded from NVIDIA APT). |
+| ~~`devfreq` governor missing~~ | ~~nvgpu requested `nvgpu_scaling` governor (L4T-specific, unavailable in Talos). Logged "Unable to find governor".~~ | **RESOLVED** — Patched in nvgpu 5.1.0: `nvgpu_scaling` → `simple_ondemand` (compiled into Talos kernel as `CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y`). |
 | `Can't initialize nvrm channel` at startup | Logged by Ollama's CUDA backend; libnvrm_gpu channel init has a non-fatal issue | Non-fatal: GPU channels ARE created (visible in nvgpu debugfs), inference works normally |
 | dustynv Ollama entrypoint exits | Default entrypoint starts `ollama serve` in background then exits → pod status "Completed" → restart loop | Override with `command: ["ollama", "serve"]` to keep process in foreground |
 | `apply-config` / `upgrade` breaks NVMe boot (signing key mismatch) | `apply-config --mode no-reboot` and `talosctl upgrade` silently replace the NVMe EFI UKI with a new build that has a **different random kernel signing key**. With `module.sig_enforce=1`, the `kernel-modules-clang` and `nvidia-tegra-nvgpu` extension modules are rejected → NVMe PCIe driver fails → STATE/META "missing" → maintenance mode. Symptom: `Loading of module with unavailable key is rejected` (x6) in UART log, then STATE/META both "waiting → missing". **Fix**: after every `apply-config`/upgrade, re-run the UKI copy pod from Section 7.5 to overwrite all NVMe UKIs with the USB UKI. Long-term fix: use reproducible signing key in custom-installer. | See Section 7.5 |
@@ -1787,6 +1828,7 @@ Current images in the local registry (`10.0.10.24:5001`):
 | `3.0.0-6.18.18-talos` | Kernel 6.18 API patches (`vm_flags`, `class_create`) | ❌ Unknown |
 | `4.0.0-6.18.18-talos` | All Clang warnings fixed; kernel module loads | ❌ Broken — OOT host1x missing `/dev/nvhost-ctrl`; UBSAN in netlist.c |
 | `5.0.0-6.18.18-talos` | `CONFIG_TEGRA_GK20A_NVHOST=n`; no nvhost dependency | ✅ **WORKING** — confirmed CUDA inference |
+| `5.1.0-6.18.18-talos` | devfreq governor patched: `nvgpu_scaling` → `simple_ondemand` | ✅ **WORKING** — no devfreq error in dmesg |
 
 **`nvidia-firmware-ext` version history**:
 
@@ -1794,7 +1836,8 @@ Current images in the local registry (`10.0.10.24:5001`):
 |---|---|---|
 | `v1`, `v2` | `/usr/lib/firmware/nvidia/ga10b/` | ELOOP on all loads |
 | `v3` | Both `/nvidia/ga10b/` and `/ga10b/` | ELOOP still on `/lib` path |
-| `v4` | `/usr/lib/firmware/ga10b/` (direct) | **Working** — no ELOOP |
+| `v4` | `/usr/lib/firmware/ga10b/` (direct) | **Working** — no ELOOP; `pmu_pkc_prod_sig.bin` missing |
+| `v5` | Same as v4 + `pmu_pkc_prod_sig.bin` added | ✅ **Current** — all required files present |
 
 ---
 
