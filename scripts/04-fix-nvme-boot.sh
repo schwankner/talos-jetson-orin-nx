@@ -21,7 +21,7 @@ source "$(dirname "$0")/common.sh"
 
 NODE_HOSTNAME="${NODE_HOSTNAME:-talos-smq-3hh}"
 KUBECONFIG_PATH="${KUBECONFIG_PATH:-${REPO_ROOT}/kubeconfig}"
-UKI_FILENAME="${UKI_FILENAME:-talos-v8.efi}"   # name as stored on USB EFI partition
+UKI_FILENAME="${UKI_FILENAME:-talos-nvgpu${NVGPU_VERSION}.efi}"  # name to write on NVMe EFI
 
 check_kubectl
 [[ -f "${KUBECONFIG_PATH}" ]] || error "kubeconfig not found: ${KUBECONFIG_PATH}"

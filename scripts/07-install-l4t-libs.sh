@@ -38,6 +38,8 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      tolerations:
+        - operator: Exists
       containers:
         - name: install-libs
           image: ubuntu:22.04
@@ -64,6 +66,16 @@ spec:
               done
               echo "Installed \$(ls \$DEST/tegra/ | wc -l) libraries to \$DEST/tegra/"
               ls \$DEST/tegra/ | grep -E "libcuda|libnvrm" | head -10
+              # Create unversioned symlinks so loaders that dlopen("libcuda.so") etc. work
+              cd \$DEST/tegra
+              for lib in libcuda.so libnvrm_gpu.so libnvrm_mem.so libnvrm_host1x.so \
+                         libnvrm_chip.so libnvrm_sync.so libnvrm_surface.so libnvrm_stream.so; do
+                versioned=\$(ls \${lib}.* 2>/dev/null | head -1)
+                if [ -n "\$versioned" ] && [ ! -e "\$lib" ]; then
+                  ln -sf "\$versioned" "\$lib"
+                  echo "Symlink: \$lib -> \$versioned"
+                fi
+              done
           volumeMounts:
             - name: nvidia-libs
               mountPath: /nvidia-libs
