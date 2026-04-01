@@ -61,7 +61,7 @@ bash "$(dirname "$0")/00-setup-keys.sh"
 # stock imager image, then use that as the UKI builder.
 info "Extracting LLVM kernel from custom-installer registry image..."
 KERNEL_DIR=$(mktemp -d)
-trap "rm -rf ${KERNEL_DIR}" EXIT
+trap 'rm -rf "${KERNEL_DIR}"' EXIT
 
 # Pull and extract kernel using docker (handles both Docker v2 and OCI manifest formats)
 docker pull --platform linux/arm64 \
