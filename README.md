@@ -1,54 +1,85 @@
-# Talos Linux on Jetson Orin NX — NVIDIA CUDA + GPU Compute
+# Talos Linux on NVIDIA Jetson Orin NX — GPU Compute / CUDA
 
-A complete guide to running [Talos Linux](https://www.talos.dev/) on the **NVIDIA Jetson Orin NX**
-with full GPU compute (CUDA) support in Kubernetes pods. This covers everything from building
-a custom kernel and NVIDIA kernel modules from source, packaging them as Talos system
-extensions, generating bootable USB and UKI images, and operating the resulting single-node
-cluster.
+[![Talos](https://img.shields.io/badge/Talos-v1.12.6-blue)](https://github.com/siderolabs/talos/releases/tag/v1.12.6)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35.0-blue)](https://kubernetes.io/)
+[![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
+[![nvgpu](https://img.shields.io/badge/nvgpu-5.1.0-green)](https://github.com/OE4T/linux-nvgpu)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
+[![CI](https://github.com/YOUR_ORG/talos-jetson-orin-nx/actions/workflows/ci.yaml/badge.svg)](https://github.com/YOUR_ORG/talos-jetson-orin-nx/actions/workflows/ci.yaml)
+
+Run [Talos Linux](https://www.talos.dev/) on the **NVIDIA Jetson Orin NX** with full CUDA
+GPU compute support in Kubernetes pods. This repository provides everything needed:
+
+- **Custom Linux kernel** 6.18.18 — built with the Clang/LLVM toolchain and a reproducible
+  module-signing key so OOT modules never break after a kernel rebuild
+- **`nvidia-tegra-nvgpu` system extension** — NVIDIA GA10B GPU driver, compiled from
+  [OE4T](https://github.com/OE4T/linux-nvgpu) patches against upstream kernel 6.18
+- **`nvidia-firmware-ext` system extension** — JetPack r36.5 firmware blobs at the correct
+  path (`ga10b/`) that Talos's overlayfs can actually load
+- **Imager profiles** and **build scripts** to produce a bootable USB image in minutes
+- **Kubernetes manifests** for GPU-accelerated [Ollama](https://ollama.ai/) inference
+
+**Verified result** (Boot 12, 2026-04-01):
+- NVMe online at **13.7 s**, all volumes ready, `module.sig_enforce=1` — **zero rejections**
+- GPU inference: **~7–8 tok/s** decode, **~700 tok/s** prefill (qwen2.5:1.5b, 29/29 GPU layers)
+
+---
+
+## Hardware
+
+| Component | Details |
+|-----------|---------|
+| SoM | NVIDIA Jetson Orin NX 16 GB |
+| GPU | NVIDIA GA10B (Ampere, SM 8.7) |
+| VRAM | 15.3 GiB (shared LPDDR5) |
+| Storage | NVMe SSD (PCIe) — `/dev/nvme0n1` |
+| Boot | UEFI via systemd-boot + UKI |
+| Serial | UART via TCU (`ttyTCU0,115200`) |
 
 ---
 
 ## Table of Contents
 
-0. [Quick Start (Scripts)](#0-quick-start-scripts)
-1. [Overview & Architecture](#1-overview--architecture)
-2. [Why This Is Non-Trivial](#2-why-this-is-non-trivial)
-3. [Repository Layout](#3-repository-layout)
-4. [Prerequisites](#4-prerequisites)
-5. [Component Versions](#5-component-versions)
-6. [Build Pipeline](#6-build-pipeline)
-   - [6.1 Local Registry Setup](#61-local-registry-setup)
-   - [6.2 Custom Kernel Build](#62-custom-kernel-build)
-   - [6.3 nvidia-tegra-nvgpu Extension](#63-nvidia-tegra-nvgpu-extension)
-   - [6.4 kernel-modules-clang Extension](#64-kernel-modules-clang-extension)
-   - [6.5 nvidia-firmware-ext Extension](#65-nvidia-firmware-ext-extension)
-   - [6.6 Custom Installer Image](#66-custom-installer-image)
-   - [6.7 UKI Image (Unified Kernel Image)](#67-uki-image-unified-kernel-image)
-   - [6.8 USB Boot Image](#68-usb-boot-image)
-7. [Cluster Setup](#7-cluster-setup)
-   - [7.1 First Boot from USB (Maintenance Mode)](#71-first-boot-from-usb-maintenance-mode)
-   - [7.2 Apply Machine Config](#72-apply-machine-config)
-   - [7.3 Bootstrap etcd](#73-bootstrap-etcd)
-   - [7.4 Retrieve Credentials](#74-retrieve-credentials)
-   - [7.5 Fix NVMe Boot (Copy USB UKI to NVMe EFI Partition)](#75-fix-nvme-boot-copy-usb-uki-to-nvme-efi-partition)
-8. [Machine Configuration Reference](#8-machine-configuration-reference)
-9. [Flashing the USB Drive (macOS)](#9-flashing-the-usb-drive-macos)
-10. [Verifying GPU / CUDA](#10-verifying-gpu--cuda)
-11. [Root-Cause Analysis: Key Bugs Fixed](#11-root-cause-analysis-key-bugs-fixed)
-    - [11.1 Firmware ELOOP Error](#111-firmware-eloop-error)
-    - [11.2 Kernel Module Signing](#112-kernel-module-signing)
-    - [11.3 Clang Toolchain Consistency](#113-clang-toolchain-consistency)
-    - [11.4 Kernel 6.18 API Changes](#114-kernel-618-api-changes)
-    - [11.5 Undefined Symbols (L4T-specific)](#115-undefined-symbols-l4t-specific)
-    - [11.6 CUDA Error 999 — nvhost syncpoint](#116-cuda-error-999-cudastreamsynchronize--nvhost-syncpoint)
-12. [Running Ollama with GPU Acceleration](#12-running-ollama-with-gpu-acceleration)
-13. [Cluster Recovery](#13-cluster-recovery)
-14. [Known Limitations](#14-known-limitations)
-15. [Reference: All Image Tags](#15-reference-all-image-tags)
+1. [Quick Start](#1-quick-start)
+2. [Overview & Architecture](#2-overview--architecture)
+3. [Why This Is Non-Trivial](#3-why-this-is-non-trivial)
+4. [Repository Layout](#4-repository-layout)
+5. [Prerequisites](#5-prerequisites)
+6. [Component Versions](#6-component-versions)
+7. [Build Pipeline](#7-build-pipeline)
+   - [7.1 Local Registry Setup](#71-local-registry-setup)
+   - [7.2 Custom Kernel Build](#72-custom-kernel-build)
+   - [7.3 nvidia-tegra-nvgpu Extension](#73-nvidia-tegra-nvgpu-extension)
+   - [7.4 kernel-modules-clang Extension](#74-kernel-modules-clang-extension)
+   - [7.5 nvidia-firmware-ext Extension](#75-nvidia-firmware-ext-extension)
+   - [7.6 Custom Installer Image](#76-custom-installer-image)
+   - [7.7 UKI Image (Unified Kernel Image)](#77-uki-image-unified-kernel-image)
+   - [7.8 USB Boot Image](#78-usb-boot-image)
+8. [Cluster Setup](#8-cluster-setup)
+   - [8.1 First Boot from USB (Maintenance Mode)](#81-first-boot-from-usb-maintenance-mode)
+   - [8.2 Apply Machine Config](#82-apply-machine-config)
+   - [8.3 Bootstrap etcd](#83-bootstrap-etcd)
+   - [8.4 Retrieve Credentials](#84-retrieve-credentials)
+   - [8.5 Fix NVMe Boot (Copy USB UKI to NVMe EFI Partition)](#85-fix-nvme-boot-copy-usb-uki-to-nvme-efi-partition)
+9. [Machine Configuration Reference](#9-machine-configuration-reference)
+10. [Flashing the USB Drive (macOS)](#10-flashing-the-usb-drive-macos)
+11. [Verifying GPU / CUDA](#11-verifying-gpu--cuda)
+12. [Root-Cause Analysis: Key Bugs Fixed](#12-root-cause-analysis-key-bugs-fixed)
+    - [12.1 Firmware ELOOP Error](#121-firmware-eloop-error)
+    - [12.2 Kernel Module Signing](#122-kernel-module-signing)
+    - [12.3 Clang Toolchain Consistency](#123-clang-toolchain-consistency)
+    - [12.4 Kernel 6.18 API Changes](#124-kernel-618-api-changes)
+    - [12.5 Undefined Symbols (L4T-specific)](#125-undefined-symbols-l4t-specific)
+    - [12.6 CUDA Error 999 — nvhost syncpoint](#126-cuda-error-999-cudastreamsynchronize--nvhost-syncpoint)
+13. [Running Ollama with GPU Acceleration](#13-running-ollama-with-gpu-acceleration)
+14. [Cluster Recovery](#14-cluster-recovery)
+15. [Known Limitations](#15-known-limitations)
+16. [Contributing](#16-contributing)
+17. [Reference: All Image Tags](#17-reference-all-image-tags)
 
 ---
 
-## 0. Quick Start (Scripts)
+## 1. Quick Start
 
 All build and deploy steps are scripted in `scripts/`. Environment variables override
 all defaults (registry, versions, node IP). Scripts are idempotent and CI-compatible.
@@ -61,8 +92,8 @@ all defaults (registry, versions, node IP). Scripts are idempotent and CI-compat
 | `REGISTRY_DOCKER` | `host.docker.internal:5001` | Registry as seen from inside Docker |
 | `TALOS_VERSION` | `v1.12.6` | Talos release |
 | `KERNEL_VERSION` | `6.18.18` | Kernel version (must match extensions) |
-| `NVGPU_VERSION` | `5.0.0` | nvgpu extension version to use |
-| `FIRMWARE_EXT_TAG` | `v4` | nvidia-firmware-ext tag |
+| `NVGPU_VERSION` | `5.1.0` | nvgpu extension version to use |
+| `FIRMWARE_EXT_TAG` | `v5` | nvidia-firmware-ext tag |
 | `NODE_IP` | `10.0.10.38` | Jetson node IP |
 | `NODE_HOSTNAME` | `talos-smq-3hh` | Kubernetes node name |
 
@@ -98,7 +129,7 @@ sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/rdiskN bs=4m && sync
 ./scripts/05-bootstrap-cluster.sh
 
 # 6. Deploy gpu-libs-restore DaemonSet (auto-restores JetPack libs on every boot)
-kubectl apply -f gpu-libs-restore.yaml
+kubectl apply -f manifests/ollama/gpu-libs-restore.yaml
 
 # 7. Deploy Ollama and pull model
 ./scripts/06-deploy-ollama.sh
@@ -114,7 +145,7 @@ kubectl apply -f gpu-libs-restore.yaml
 ./scripts/04-fix-nvme-boot.sh
 
 # Deploy gpu-libs-restore DaemonSet (auto-restores JetPack libs after wipe):
-kubectl apply -f gpu-libs-restore.yaml
+kubectl apply -f manifests/ollama/gpu-libs-restore.yaml
 
 # Test a different nvgpu extension version (for GPU debugging):
 NVGPU_VERSION=3.0.0 FIRMWARE_EXT_TAG=v3 ./scripts/08-test-nvgpu.sh
@@ -142,7 +173,7 @@ build-usb:
 
 ---
 
-## 1. Overview & Architecture
+## 2. Overview & Architecture
 
 Talos Linux is an immutable, minimal OS designed exclusively for Kubernetes. There is no shell,
 no SSH, no package manager — everything runs in containers, and kernel modules can only be
@@ -195,7 +226,7 @@ siderolabs/pkgs (commit a92bed5, branch release-1.12)
 
 ---
 
-## 2. Why This Is Non-Trivial
+## 3. Why This Is Non-Trivial
 
 ### 2.1 Talos Enforces Kernel Module Signing
 
@@ -274,51 +305,66 @@ completely bypassing the `/lib` symlink.
 
 ---
 
-## 3. Repository Layout
+## 4. Repository Layout
 
 ```
-jetson-test/                         ← git repository root
-├── .gitignore                       ← excludes credentials, *.efi, *.raw, dist/
-├── README.md                        ← this file
-├── controlplane.yaml                ← Talos machine config (apply to node)
-├── ollama-deployment.yaml           ← Ollama Kubernetes Deployment + Service
+talos-jetson-orin-nx/
+├── .github/
+│   └── workflows/
+│       └── ci.yaml              ← shellcheck + YAML validation + release
 │
-├── talosconfig                      ← !! gitignored — talosctl PKI credentials
-├── kubeconfig                       ← !! gitignored — kubectl PKI credentials
+├── profiles/                    ← Talos imager profiles (input to 01-build-uki.sh)
+│   ├── uki-nvgpu5.yaml          ← Current: nvgpu 5.1.0 + firmware v5
+│   ├── uki-nvgpu4.yaml          ← Legacy: nvgpu 4.0.0
+│   └── uki-nvgpu3.yaml          ← Legacy: nvgpu 3.0.0
 │
-├── imager-profiles/                 ← Parameterized imager profiles (committed)
-│   ├── uki-nvgpu5.yaml              ← Current UKI (nvgpu 5.1.0, firmware v5)
-│   ├── uki-nvgpu4.yaml              ← Legacy UKI (nvgpu 4.0.0, firmware v4)
-│   └── uki-nvgpu3.yaml              ← Test UKI (nvgpu 3.0.0, firmware v3)
+├── manifests/
+│   ├── talos/
+│   │   └── controlplane.yaml.example  ← Talos machine config template
+│   └── ollama/
+│       ├── ollama-deployment.yaml     ← Ollama Deployment + NodePort Service
+│       └── gpu-libs-restore.yaml      ← DaemonSet: auto-restore JetPack r36.5 libs
 │
-├── scripts/                         ← Reproducible build + deploy scripts (committed)
-│   ├── common.sh                    ← Shared env vars (REGISTRY, versions, etc.)
-│   ├── 01-build-uki.sh              ← Build UKI via imager (parameterizable)
-│   ├── 02-build-usb-image.sh        ← Build bootable USB raw disk image
-│   ├── 03-apply-config.sh           ← Apply Talos machine config (fresh or update)
-│   ├── 04-fix-nvme-boot.sh          ← Copy working UKI to NVMe EFI partition
-│   ├── 05-bootstrap-cluster.sh      ← Bootstrap etcd + retrieve credentials
-│   ├── 06-deploy-ollama.sh          ← Deploy Ollama + pull model
-│   ├── 07-install-l4t-libs.sh       ← [LEGACY] Download JetPack libs via K8s Job (replaced by gpu-libs-restore DaemonSet)
-│   └── 08-test-nvgpu.sh             ← Build + deploy UKI with different nvgpu version
+├── scripts/                     ← Reproducible build + deploy scripts
+│   ├── common.sh                ← Shared env vars (REGISTRY, versions, paths)
+│   ├── 00-setup-keys.sh         ← Generate kernel module signing key (once per repo)
+│   ├── 01-build-uki.sh          ← Assemble UKI from registry images
+│   ├── 02-build-usb-image.sh    ← Create bootable USB raw image
+│   ├── 03-apply-config.sh       ← Apply Talos machine config (fresh install or update)
+│   ├── 04-fix-nvme-boot.sh      ← Copy USB UKI to NVMe EFI + fix boot order
+│   ├── 05-bootstrap-cluster.sh  ← Bootstrap etcd + save credentials
+│   ├── 06-deploy-ollama.sh      ← Deploy Ollama LLM server with GPU
+│   ├── 07-install-l4t-libs.sh   ← [legacy] Manual JetPack libs download
+│   ├── 08-test-nvgpu.sh         ← Test different nvgpu versions
+│   └── 09-build-nvgpu.sh        ← Full build: nvgpu extension + kernel + installer
 │
-├── gpu-libs-restore.yaml            ← DaemonSet: auto-restore JetPack libs after full wipe
+├── keys/                        ← Kernel module signing key pair (see note below)
+│   ├── signing_key.pem          ← RSA-4096 private key
+│   └── signing_key.x509         ← X.509 certificate (embedded in kernel)
 │
-├── logs/                            ← UART debug logs from boot sessions (committed)
+├── logs/                        ← UART serial logs from boot sessions
 │   └── uart-run-1..12.log
 │
-└── dist/                            ← !! gitignored — build outputs
+├── Makefile                     ← Convenience targets (wraps scripts/)
+├── CHANGELOG.md                 ← Release history
+├── LICENSE                      ← Mozilla Public License v2.0
+└── dist/                        ← !! gitignored — build outputs
     └── uki-nvgpu5.1.0/
-        └── metal-arm64-uki.efi      ← UKI (built by 01-build-uki.sh)
+        └── metal-arm64-uki.efi  ← UKI built by 01-build-uki.sh
 ```
 
+> **Signing key note**: `keys/signing_key.pem` is an RSA-4096 private key committed
+> intentionally. It is not a secret — it is a **build-time reproducibility key** embedded in
+> the kernel via `CONFIG_MODULE_SIG_KEY`. Anyone who builds their own kernel/modules should
+> generate their own key with `./scripts/00-setup-keys.sh`. See [Section 12.2](#122-kernel-module-signing).
+
 > **Credentials**: `talosconfig` and `kubeconfig` contain TLS private keys and are
-> git-ignored. Keep a secure backup (e.g. encrypted password manager or `~/talos-jetson/`).
-> After any cluster operation that produces new credentials, save both files immediately.
+> git-ignored. Keep a secure backup. After any cluster operation that produces new
+> credentials, save both files immediately.
 
 ---
 
-## 4. Prerequisites
+## 5. Prerequisites
 
 ### Build Host
 
@@ -355,7 +401,7 @@ curl http://10.0.10.24:5001/v2/_catalog
 
 ---
 
-## 5. Component Versions
+## 6. Component Versions
 
 | Component | Version | Notes |
 |---|---|---|
@@ -374,9 +420,9 @@ curl http://10.0.10.24:5001/v2/_catalog
 
 ---
 
-## 6. Build Pipeline
+## 7. Build Pipeline
 
-### 6.1 Local Registry Setup
+### 7.1 Local Registry Setup
 
 All custom images are stored in the local OCI registry. The Colima Docker daemon accesses
 it as `host.docker.internal:5001`; the Jetson accesses it as `10.0.10.24:5001`.
@@ -385,7 +431,7 @@ it as `host.docker.internal:5001`; the Jetson accesses it as `10.0.10.24:5001`.
 docker run -d --name registry --restart=always -p 5001:5000 registry:2
 ```
 
-### 6.2 Custom Kernel Build
+### 7.2 Custom Kernel Build
 
 The kernel must be built from the **exact** pkgs commit that produced Talos v1.12.6.
 Any other commit yields a different `6.18.18-talos` Vermagic string and modules will
@@ -444,7 +490,7 @@ and will never touch it.
 `09-build-nvgpu.sh` verifies the serial matches after each build. Keys are committed
 to `keys/` and are the single source of truth for all module signing.
 
-### 6.3 nvidia-tegra-nvgpu Extension
+### 7.3 nvidia-tegra-nvgpu Extension
 
 Contains: `nvgpu.ko`, `host1x.ko`, and supporting modules for the Jetson Orin NX GPU.
 
@@ -496,7 +542,7 @@ docker buildx build --platform linux/arm64 \
   --push /tmp/nvgpu-ext/
 ```
 
-### 6.4 kernel-modules-clang Extension
+### 7.4 kernel-modules-clang Extension
 
 Because the custom kernel was compiled with Clang, the standard Talos kernel module tree
 (GCC-compiled) is incompatible. This extension delivers Clang-compiled kernel modules.
@@ -528,7 +574,7 @@ docker buildx build --platform linux/arm64 \
   --push /tmp/kmod-ext/
 ```
 
-### 6.5 nvidia-firmware-ext Extension
+### 7.5 nvidia-firmware-ext Extension
 
 The GA10B GPU requires firmware blobs to be present at `/usr/lib/firmware/ga10b/` when
 `nvgpu.ko` loads. This extension delivers the firmware from JetPack r36.5.
@@ -581,7 +627,7 @@ mkdir -p /tmp/nvidia-firmware-v4
 # (See git history for full v4 build commands)
 ```
 
-### 6.6 Custom Installer Image
+### 7.6 Custom Installer Image
 
 The official Talos installer contains a GCC-built kernel. Replace its `vmlinuz` with the
 Clang-built kernel so the installed system uses our kernel from the beginning.
@@ -602,7 +648,7 @@ docker buildx build --platform linux/arm64 \
   --push /tmp/custom-installer/
 ```
 
-### 6.7 UKI Image (Unified Kernel Image)
+### 7.7 UKI Image (Unified Kernel Image)
 
 The UKI is a single PE/EFI binary containing the kernel, initramfs, all system extensions,
 and the kernel command line embedded at build time. It boots directly from UEFI.
@@ -667,7 +713,7 @@ output:
   outFormat: raw
 ```
 
-### 6.8 USB Boot Image
+### 7.8 USB Boot Image
 
 A bootable USB disk image (FAT32, MBR) with the UKI placed at the standard ARM64
 fallback boot path `EFI/BOOT/BOOTAA64.EFI`. This is the maximum-compatibility approach —
@@ -704,9 +750,9 @@ sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/sdX bs=4M status=progress && sy
 
 ---
 
-## 7. Cluster Setup
+## 8. Cluster Setup
 
-### 7.1 First Boot from USB (Maintenance Mode)
+### 8.1 First Boot from USB (Maintenance Mode)
 
 When Talos boots from the USB image, it looks for its STATE partition (GPT label
 `STATE`) on **any attached disk** — not just the boot device. If no Talos STATE is
@@ -740,11 +786,11 @@ error getting version: rpc error: code = Unavailable desc = ... tls: certificate
 ```
 → The NVMe has an old STATE partition. See [Section 13](#13-cluster-recovery).
 
-### 7.2 Apply Machine Config
+### 8.2 Apply Machine Config
 
 ```bash
 talosctl --nodes 10.0.10.38 --endpoints 10.0.10.38 --insecure \
-  apply-config --file ~/PycharmProjects/jetson-test/controlplane.yaml
+  apply-config --file manifests/talos/controlplane.yaml.example
 ```
 
 Talos will now:
@@ -754,7 +800,7 @@ Talos will now:
 4. Install Talos + extensions to NVMe
 5. Reboot automatically (~3-5 minutes total)
 
-### 7.3 Bootstrap etcd
+### 8.3 Bootstrap etcd
 
 After the reboot, wait for the node API to come back up, then bootstrap etcd **exactly
 once** per fresh cluster install:
@@ -776,7 +822,7 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 > already bootstrapped — skip this step and proceed to Step 7.4.
 > Running bootstrap on an existing cluster corrupts it.
 
-### 7.4 Retrieve Credentials
+### 8.4 Retrieve Credentials
 
 ```bash
 # Kubeconfig for kubectl
@@ -801,7 +847,7 @@ talos-<hash>      Ready    control-plane   2m    v1.35.1
 > operation that produces new credentials. This prevents the cert-mismatch situation
 > described in Section 13.
 
-### 7.5 Fix NVMe Boot (Copy USB UKI to NVMe EFI Partition + Boot Order)
+### 8.5 Fix NVMe Boot (Copy USB UKI to NVMe EFI Partition + Boot Order)
 
 **Problem**: After `apply-config` or `talosctl upgrade`, Talos **silently replaces the
 NVMe EFI UKI** with a new build that has a **different kernel module signing key** than
@@ -905,9 +951,9 @@ kubectl delete pod fix-nvme-uki -n default
 
 ---
 
-## 8. Machine Configuration Reference
+## 9. Machine Configuration Reference
 
-**File**: `~/PycharmProjects/jetson-test/controlplane.yaml`
+**File**: `manifests/talos/controlplane.yaml.example`
 
 Key sections explained:
 
@@ -952,7 +998,7 @@ cluster:
 
 ---
 
-## 9. Flashing the USB Drive (macOS)
+## 10. Flashing the USB Drive (macOS)
 
 ### Current USB Image
 
@@ -1014,7 +1060,7 @@ Then reflash the modified raw image with `sudo dd`.
 
 ---
 
-## 10. Verifying GPU / CUDA
+## 11. Verifying GPU / CUDA
 
 ### Check Kernel Module and Firmware Loading
 
@@ -1067,9 +1113,9 @@ GPU 0: Orin
 
 ---
 
-## 11. Root-Cause Analysis: Key Bugs Fixed
+## 12. Root-Cause Analysis: Key Bugs Fixed
 
-### 11.1 Firmware ELOOP Error
+### 12.1 Firmware ELOOP Error
 
 **Symptom**: `dmesg` shows nvgpu attempting to load firmware files and failing with
 error code `-40` (`ELOOP`) even though the files physically exist in the filesystem.
@@ -1098,7 +1144,7 @@ completely avoiding the symlink and the ELOOP.
 This parameter is embedded in the UKI at build time (see Section 6.7) and is propagated
 to the NVMe installation via `grubUseUKICmdline: true` (see Section 8).
 
-### 11.2 Kernel Module Signing
+### 12.2 Kernel Module Signing
 
 **Symptom**: `insmod nvgpu.ko` returns `Required key not available (-126)`, or Talos
 boots into maintenance mode with 6 kernel module rejections in dmesg, no NVMe, no IP.
@@ -1142,7 +1188,7 @@ talosctl -n 10.0.10.38 read /proc/keys | grep -i asymmetric
 The Vermagic string check (`6.18.18-talos SMP preempt mod_unload aarch64`) still applies
 and the kernel version must match exactly.
 
-### 11.6 CUDA Error 999 (cudaStreamSynchronize) — nvhost syncpoint
+### 12.6 CUDA Error 999 (cudaStreamSynchronize) — nvhost syncpoint
 
 **Symptom**: CUDA programs fail immediately with error 999 (`cudaErrorUnknown`) when
 calling `cudaStreamSynchronize()`. The GPU is visible (nvgpu loads), but compute fails.
@@ -1166,7 +1212,7 @@ make -C /lib/modules/.../build M=${NVGPU_SRC} \
   ...
 ```
 
-### 11.3 Clang Toolchain Consistency
+### 12.3 Clang Toolchain Consistency
 
 **Symptom**: OOT module build fails immediately:
 ```
@@ -1185,7 +1231,7 @@ rejects them.
 2. Run `make olddefconfig LLVM=1` before the kernel build — this lets Clang detect its
    own capabilities and disables all `CC_HAS_*` options that only exist in GCC
 
-### 11.4 Kernel 6.18 API Changes
+### 12.4 Kernel 6.18 API Changes
 
 #### `vm_flags` Write Protection (since kernel 6.3)
 
@@ -1207,7 +1253,7 @@ struct class *cls = class_create("nvgpu");
 
 The `THIS_MODULE` parameter was removed. Patched in all affected source files.
 
-### 11.5 Undefined Symbols (L4T-specific)
+### 12.5 Undefined Symbols (L4T-specific)
 
 These symbols exist in L4T kernels but not in upstream Linux:
 
@@ -1223,7 +1269,7 @@ allowing the module to build and load. Code paths that dereference these symbols
 produce a kernel oops at runtime, but standard CUDA compute workloads on Jetson Orin NX
 with a standard device tree do not invoke them.
 
-### 11.7 devfreq Governor Missing (`nvgpu_scaling` not found)
+### 12.7 devfreq Governor Missing (`nvgpu_scaling` not found)
 
 **Symptom**: dmesg shows during GPU power-on:
 ```
@@ -1250,7 +1296,7 @@ requests a governor that actually exists in the Talos kernel.
 
 ---
 
-## 12. Running Ollama with GPU Acceleration
+## 13. Running Ollama with GPU Acceleration
 
 > **Status**: ✅ **GPU acceleration is working!**
 > Ollama runs with `library=cuda variant=jetpack6` on the GA10B GPU (nvgpu 5.1.0).
@@ -1625,7 +1671,7 @@ The GPU is fully operational as of nvgpu 5.1.0:
 
 ---
 
-## 13. Cluster Recovery
+## 14. Cluster Recovery
 
 Use this procedure when `talosctl` fails with certificate errors — typically caused by
 the cluster being reinstalled without saving new credentials to `jetson-test/`.
@@ -1706,7 +1752,7 @@ talosctl apply-config \
   --insecure \
   --endpoints 10.0.10.38 \
   --nodes 10.0.10.38 \
-  --file ~/PycharmProjects/jetson-test/controlplane.yaml
+  --file manifests/talos/controlplane.yaml.example
 ```
 
 Expected output: only deprecation warnings, no errors. Talos immediately pulls the
@@ -1779,7 +1825,7 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 
 ---
 
-## 14. Known Limitations
+## 15. Known Limitations
 
 | Limitation | Impact | Notes / Workaround |
 |---|---|---|
@@ -1807,7 +1853,7 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 
 ---
 
-## 15. Reference: All Image Tags
+## 17. Reference: All Image Tags
 
 Current images in the local registry (`10.0.10.24:5001`):
 
@@ -1849,6 +1895,35 @@ Current images in the local registry (`10.0.10.24:5001`):
 | `v3` | Both `/nvidia/ga10b/` and `/ga10b/` | ELOOP still on `/lib` path |
 | `v4` | `/usr/lib/firmware/ga10b/` (direct) | **Working** — no ELOOP; `pmu_pkc_prod_sig.bin` missing |
 | `v5` | Same as v4 + `pmu_pkc_prod_sig.bin` added | ✅ **Current** — all required files present |
+
+---
+
+## 16. Contributing
+
+Contributions are welcome — especially:
+
+- Support for other Jetson modules (AGX Orin, Orin Nano, Xavier NX)
+- Updated component versions (newer Talos, nvgpu, firmware)
+- Bug reports via GitHub Issues
+- Fixes for known limitations (see Section 15)
+
+### Guidelines
+
+- Follow the [Conventional Commits](https://www.conventionalcommits.org/) spec
+- Test changes with at least one full boot cycle (UART log encouraged)
+- For kernel/module builds: verify key serial matches before submitting
+  (`openssl x509 -in keys/signing_key.x509 -noout -serial`)
+- License: all contributions are subject to the [Mozilla Public License v2.0](LICENSE)
+
+### Generating your own signing key
+
+If you fork this repo, generate a new key pair so your builds are independent:
+
+```bash
+./scripts/00-setup-keys.sh --force   # regenerates keys/signing_key.{pem,x509}
+# Then rebuild the kernel and all extensions:
+make build-extensions
+```
 
 ---
 
