@@ -37,6 +37,11 @@ check_docker() {
 }
 
 check_registry() {
+  # ghcr.io and other remote registries are always HTTPS — Docker handles auth,
+  # no need to ping via HTTP.
+  if [[ "${REGISTRY}" == ghcr.io/* || "${REGISTRY}" == *.pkg.github.com/* ]]; then
+    return 0
+  fi
   curl -fsSL "http://${REGISTRY}/v2/_catalog" &>/dev/null \
     || error "Registry ${REGISTRY} is not reachable. Ensure Mac is on the Jetson network."
 }
