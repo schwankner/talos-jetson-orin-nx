@@ -1,0 +1,112 @@
+name: Build Extensions
+
+# Builds kernel + GPU driver extensions and pushes to ghcr.io.
+# Run this ONCE after updating Talos, kernel, or nvgpu versions.
+# Extensions are cached in ghcr.io — subsequent runs are auto-skipped.
+#
+# After this completes, trigger "Build USB Image" to assemble the .raw file.
+#
+# Runtime: ~90 min native (first run). Subsequent runs: ~5 min (cache hit).
+# Uses standard ubuntu-latest runner with QEMU arm64 cross-compilation.
+
+on:
+  workflow_dispatch:
+    inputs:
+      talos_version:
+        description: 'Talos version override (blank = common.sh default)'
+        required: false
+        default: ''
+      nvgpu_version:
+        description: 'nvgpu version override (blank = common.sh default)'
+        required: false
+        default: ''
+      force_rebuild:
+        description: 'Force rebuild even if images already in ghcr.io (true/false)'
+        required: false
+        default: 'false'
+
+jobs:
+  build-extensions:
+    name: Build extensions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if extension images already exist
+        id: check_cache
+        run: |
+          source scripts/common.sh
+          NVGPU="${NVGPU_VERSION:-5.1.0}"
+          KERNEL="${KERNEL_VERSION:-6.18.18}"
+          IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU}-${KERNEL}-talos"
+          if [[ "${{ inputs.force_rebuild }}" != "true" ]] && \
+             docker manifest inspect "${IMAGE}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "✓ ${IMAGE} already in ghcr.io — skipping build"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Will build: ${IMAGE} not found or force_rebuild=true"
+          fi
+
+      - name: Set up QEMU (arm64 cross-compilation)
+        if: steps.check_cache.outputs.skip != 'true'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        if: steps.check_cache.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+
+      - name: Restore signing keys
+        if: steps.check_cache.outputs.skip != 'true'
+        run: |
+          mkdir -p keys
+          printf '%s' "${{ secrets.SIGNING_KEY_PEM }}"  > keys/signing_key.pem
+          printf '%s' "${{ secrets.SIGNING_KEY_X509 }}" > keys/signing_key.x509
+          chmod 600 keys/signing_key.pem
+          openssl x509 -in keys/signing_key.x509 -noout -serial
+
+      - name: Free disk space for kernel build (~40 GB needed)
+        if: steps.check_cache.outputs.skip != 'true'
+        run: |
+          sudo apt-get remove -y --purge '^dotnet-.*' '^llvm-.*' '^php.*' \
+            azure-cli google-cloud-sdk google-chrome-stable firefox 2>/dev/null || true
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /usr/local/graalvm
+          df -h /
+
+      - name: Restore BuildKit GHA cache
+        if: steps.check_cache.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/buildkit-cache
+          key: buildkit-ext-${{ hashFiles('scripts/09-build-nvgpu.sh', 'scripts/common.sh') }}-${{ github.sha }}
+          restore-keys: |
+            buildkit-ext-${{ hashFiles('scripts/09-build-nvgpu.sh', 'scripts/common.sh') }}-
+            buildkit-ext-
+
+      - name: Build + push extensions to ghcr.io
+        if: steps.check_cache.outputs.skip != 'true'
+        run: make build-extensions
+        timeout-minutes: 360
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
+          TALOS_VERSION: ${{ inputs.talos_version || '' }}
+          NVGPU_VERSION: ${{ inputs.nvgpu_version || '' }}
