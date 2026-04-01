@@ -38,7 +38,11 @@ if [[ "$(uname)" == "Darwin" ]]; then
   hdiutil create -size "${USB_SIZE_MB}m" -fs FAT32 -volname "TALOSBOOT" \
     "${WORK_DMG}" -ov >/dev/null
 
-  MOUNT_POINT=$(hdiutil attach "${WORK_DMG}" | grep -E '/Volumes/' | awk '{print $NF}')
+  # Use explicit mount point to avoid parsing issues with hdiutil output format
+  MOUNT_POINT="/Volumes/TALOSBOOT"
+  # Unmount if already mounted from a previous run
+  hdiutil detach "${MOUNT_POINT}" >/dev/null 2>&1 || true
+  hdiutil attach "${WORK_DMG}" -mountpoint "${MOUNT_POINT}" >/dev/null
   info "Mounted at: ${MOUNT_POINT}"
 
   mkdir -p "${MOUNT_POINT}/EFI/BOOT"
@@ -54,7 +58,7 @@ default BOOTAA64.EFI
 timeout 5
 LEOF
 
-  hdiutil detach "${MOUNT_POINT}" >/dev/null
+  hdiutil detach "${MOUNT_POINT}" >/dev/null 2>&1 || hdiutil detach "${MOUNT_POINT}" -force >/dev/null 2>&1 || true
 
   # Convert to raw (hdiutil adds .dmg extension automatically, then rename)
   hdiutil convert "${WORK_DMG}" -format UDRO -o "${USB_OUT}" -ov >/dev/null 2>&1 || true
