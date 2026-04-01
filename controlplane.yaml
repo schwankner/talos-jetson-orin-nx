@@ -88,8 +88,8 @@ machine:
         # UKI inside the custom-installer image by the imager profile — do NOT set this.
         extensions:
             - image: 10.0.10.24:5001/kernel-modules-clang:1.1.0-6.18.18-talos
-            - image: 10.0.10.24:5001/nvidia-tegra-nvgpu:3.0.0-6.18.18-talos
-            - image: 10.0.10.24:5001/nvidia-firmware-ext:v3
+            - image: 10.0.10.24:5001/nvidia-tegra-nvgpu:5.0.0-6.18.18-talos
+            - image: 10.0.10.24:5001/nvidia-firmware-ext:v4
         
         # # Look up disk using disk attributes like model, size, serial and others.
         # diskSelector:
