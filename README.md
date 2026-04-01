@@ -71,7 +71,7 @@ GPU compute support in Kubernetes pods. This repository provides everything need
     - [12.4 Kernel 6.18 API Changes](#124-kernel-618-api-changes)
     - [12.5 Undefined Symbols (L4T-specific)](#125-undefined-symbols-l4t-specific)
     - [12.6 CUDA Error 999 — nvhost syncpoint](#126-cuda-error-999-cudastreamsynchronize--nvhost-syncpoint)
-    - [12.7 devfreq Governor Missing](#127-devfreq-governor-missing-nvgpu_scaling-not-found)
+    - [12.7 devfreq Governor / governor_pod_scaling.ko](#127-devfreq-governor--governor_pod_scalingko-fixed-boot-15)
     - [12.8 CDI Stack Bugs — containerd 2.x + Custom Device Plugin](#128-cdi-stack-bugs--containerd-2x--custom-device-plugin)
 13. [Running Ollama with GPU Acceleration](#13-running-ollama-with-gpu-acceleration)
     - [13.1 CDI Stack (Recommended — OOB GPU access)](#131-cdi-stack-recommended--oob-gpu-access)
@@ -423,7 +423,7 @@ curl http://10.0.10.24:5001/v2/_catalog
 | OE4T linux-nvgpu | `d530a48` | patches-r36.5 |
 | OE4T linux-nv-oot | `ea32e7f` | NVIDIA OOT framework |
 | LLVM/Clang image | `ghcr.io/siderolabs/llvm:v1.14.0-alpha.0` | |
-| `nvidia-tegra-nvgpu` | **5.1.0-6.18.18-talos** | devfreq governor patched: `nvgpu_scaling` → `simple_ondemand` |
+| `nvidia-tegra-nvgpu` | **5.1.0-6.18.18-talos** | devfreq governor: `nvhost_podgov` (governor_pod_scaling.ko built with missing ccflags fix) |
 | `kernel-modules-clang` | **1.1.0-6.18.18-talos** | Current extension |
 | `nvidia-firmware-ext` | **v5** | Adds `pmu_pkc_prod_sig.bin` at `ga10b/` (was missing in v4) |
 | `custom-installer` | **v1.12.6-6.18.18** | Official installer + custom vmlinuz |
@@ -1280,43 +1280,89 @@ allowing the module to build and load. Code paths that dereference these symbols
 produce a kernel oops at runtime, but standard CUDA compute workloads on Jetson Orin NX
 with a standard device tree do not invoke them.
 
-### 12.7 devfreq Governor Missing (`nvhost_podgov` not found)
+### 12.7 devfreq Governor / governor_pod_scaling.ko (Fixed — Boot 15)
 
-**Symptom**: dmesg shows during GPU power-on:
+**Status: RESOLVED as of Boot 15** — `nvhost_podgov` governor fully operational with
+dynamic frequency scaling (306–918 MHz).
+
+#### History / previous symptom
+
+dmesg showed during GPU power-on:
 ```
 gk20a 17000000.gpu: devfreq_add_device: Unable to find governor for the device
 ```
 
-**Root cause**: OE4T `platform_ga10b_tegra.c` (commit `d530a48`, patches-r36.5) hard-codes
-the devfreq governor as `"nvhost_podgov"` — the NVIDIA Pod Scaling governor from
-`linux-nv-oot/drivers/devfreq/governor_pod_scaling.c`. This is an nvidia-oot module
-never loaded in Talos. Older OE4T commits used `"nvgpu_scaling"` instead (same problem).
+OE4T `platform_ga10b_tegra.c` (commit `d530a48`, patches-r36.5) hard-codes the devfreq
+governor as `"nvhost_podgov"` — the NVIDIA Pod Scaling governor implemented in
+`nvidia-oot/drivers/devfreq/governor_pod_scaling.c`. The module `governor_pod_scaling.ko`
+is part of the `nvidia-oot` out-of-tree tree, not the mainline kernel, so it must be built
+alongside nvgpu.
 
-The error is **non-fatal** — the GPU initializes and runs at fixed maximum clock (918 MHz),
-but dynamic frequency scaling is inactive.
+The error was **non-fatal** in earlier builds — the GPU initialized and ran at fixed maximum
+clock (918 MHz), but dynamic frequency scaling was inactive.
 
-> **Note**: The original patch in `pkg.yaml` searched for `"nvgpu_scaling"` but the OE4T
-> d530a48 source actually contains `"nvhost_podgov"` — so the patch hit its WARNING branch
-> and did nothing. Boot log confirmed: `WARNING: nvgpu_scaling not found in
-> platform_ga10b_tegra.c`. Fixed in `pkg.yaml` to target `"nvhost_podgov"` first.
+> **Earlier workaround (nvgpu 5.1.0)**: `pkg.yaml` patched `platform_ga10b_tegra.c` to
+> replace `"nvhost_podgov"` with `"simple_ondemand"` (a built-in Talos kernel governor).
+> This worked for devfreq registration but bypassed NVIDIA's Pod Scaling logic entirely.
 
-**Fix** (applied in **pkg.yaml**, requires nvgpu rebuild):
+#### Root cause of `governor_pod_scaling.ko` not being built
+
+`governor_pod_scaling.ko` was silently skipped at build time because the devfreq Makefile
+in `nvidia-oot/drivers/devfreq/` lacked two include paths:
+
+| Missing include | Needed for |
+|---|---|
+| `-I$(srctree.nvconftest)` | `nvidia/conftest.h` — NVIDIA compat macros |
+| `-I$(srctree.nvidia-oot)/include` | `trace/events/nvhost_podgov.h` — tracepoint definitions |
+
+Without these, the compiler could not find the required headers, and the module was dropped
+from the build without a fatal error. Other nvidia-oot subdirectories (host1x, nvmap, etc.)
+already carried these flags; devfreq was the only one missing them.
+
+#### Fix applied in `pkg.yaml`
+
+In the `prepare:` step for the `nvidia-oot` source tree, two `ccflags-y` lines are added
+to `nvidia-oot/drivers/devfreq/Makefile` (same pattern used for host1x, nvmap, etc.):
+
 ```bash
-GA10B="/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/platform_ga10b_tegra.c"
-# OE4T d530a48 uses "nvhost_podgov"; older OE4T uses "nvgpu_scaling"
-sed -i 's/"nvhost_podgov"/"simple_ondemand"/g' "$GA10B"
+# Fix governor_pod_scaling.ko build — add missing include paths
+DEVFREQ_MK="/oot-src/drivers/devfreq/Makefile"
+echo 'ccflags-y += -I$(srctree.nvconftest)' >> "$DEVFREQ_MK"
+echo 'ccflags-y += -I$(srctree.nvidia-oot)/include' >> "$DEVFREQ_MK"
 ```
 
-After the fix, GPU devfreq registers successfully with `simple_ondemand`
-(`CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y` in Talos 6.18.18 kernel).
+No source-code patch to `platform_ga10b_tegra.c` is needed anymore — `nvhost_podgov` is
+the correct governor name and `governor_pod_scaling.ko` now builds and loads cleanly.
 
-**To apply**: rebuild nvgpu extension and UKI:
-```bash
-./scripts/09-build-nvgpu.sh          # ~60 min — patches nvhost_podgov → simple_ondemand
-./scripts/01-build-uki.sh
-./scripts/02-build-usb-image.sh
-./scripts/03-apply-config.sh --insecure   # after flashing new USB image
+#### Result — Boot 15
+
 ```
+# dmesg (no devfreq error):
+governor_pod_scaling: loaded
+gk20a 17000000.gpu: devfreq 17000000.gpu registered with governor nvhost_podgov
+
+# /sys/class/devfreq/17000000.gpu/
+governor:           nvhost_podgov
+cur_freq:           306000000   (idle)
+available_frequencies: 306000000 408000000 510000000 612000000 714000000 816000000 918000000
+```
+
+Dynamic frequency scaling is now active. The GPU scales up under compute load and returns
+to 306 MHz at idle.
+
+#### GPU Frequency Scaling Behavior
+
+| State | Frequency |
+|---|---|
+| Idle | 306 MHz |
+| Light load | 408–510 MHz |
+| Inference burst (e.g. Ollama) | 612+ MHz (up to 918 MHz) |
+| Returns to idle after workload | 306 MHz |
+
+**Available steps**: 306 / 408 / 510 / 612 / 714 / 816 / 918 MHz (7 steps).
+
+The `nvhost_podgov` governor (NVIDIA Pod Scaling) adjusts frequency based on GPU utilization
+hints from the nvgpu driver itself, making it more Jetson-aware than `simple_ondemand`.
 
 ### 12.8 CDI Stack Bugs — containerd 2.x + Custom Device Plugin
 
@@ -2049,7 +2095,7 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 | ~~JetPack libs lost after full wipe~~ | ~~The real libs in `/var/lib/nvidia-tegra-libs/` live in EPHEMERAL. A `--wipe-mode all` reset deletes them~~ | **RESOLVED** — `gpu-libs-restore` DaemonSet auto-restores on boot. No manual Job needed. |
 | ~~GPU firmware lost after full wipe~~ | ~~`/var/fw-fresh/ga10b/` (incl. `pmu_pkc_prod_sig.bin`) lives in EPHEMERAL~~ | **RESOLVED** — `pmu_pkc_prod_sig.bin` baked into `nvidia-firmware-ext:v5`; Ollama initContainer copies it automatically. |
 | ~~`pmu_pkc_prod_sig.bin` missing from nvidia-firmware-ext~~ | ~~The system extension at `/usr/lib/firmware/ga10b/` was missing this PKC signature file; without it nvgpu panics on GPU init~~ | **RESOLVED** — Added to `nvidia-firmware-ext:v5` at build time (downloaded from NVIDIA APT). |
-| ~~`devfreq` governor missing~~ | ~~nvgpu requested `nvgpu_scaling` governor (L4T-specific, unavailable in Talos). Logged "Unable to find governor".~~ | **RESOLVED** — Patched in nvgpu 5.1.0: `nvgpu_scaling` → `simple_ondemand` (compiled into Talos kernel as `CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y`). |
+| ~~`devfreq` governor missing~~ | ~~`governor_pod_scaling.ko` not built — devfreq Makefile missing `-I$(srctree.nvconftest)` and `-I$(srctree.nvidia-oot)/include`. GPU ran at fixed 918 MHz.~~ | **RESOLVED (Boot 15)** — Added missing `ccflags-y` lines to `nvidia-oot/drivers/devfreq/Makefile` in `pkg.yaml` prepare step. `governor_pod_scaling.ko` now loads, governor=`nvhost_podgov`, dynamic scaling 306–918 MHz active. |
 | `Can't initialize nvrm channel` at startup | Logged by Ollama's CUDA backend; libnvrm_gpu channel init has a non-fatal issue | Non-fatal: GPU channels ARE created (visible in nvgpu debugfs), inference works normally |
 | dustynv Ollama entrypoint exits | Default entrypoint starts `ollama serve` in background then exits → pod status "Completed" → restart loop | Override with `command: ["ollama", "serve"]` to keep process in foreground |
 | ~~`apply-config` / `upgrade` breaks NVMe boot (signing key mismatch)~~ | ~~`apply-config --mode no-reboot` and `talosctl upgrade` would silently embed a new random kernel signing key, causing all OOT modules (`nvme.ko`, `nvgpu.ko`, etc.) to be rejected at boot with `module.sig_enforce=1`. Root cause: `certs/Makefile` FORCE rule auto-regenerates `certs/signing_key.pem` on every fresh kernel build.~~ | **RESOLVED** — `CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"` (custom filename). `make` has no auto-gen rule for this name so our committed key (`74FD747A`) is always embedded. Verified in Boot 12: zero rejections, NVMe up at 13.7s. See Section 11.2. |
