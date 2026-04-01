@@ -8,9 +8,8 @@
 #   NVGPU_VERSION    nvidia-tegra-nvgpu extension version       (default: 5.1.0)
 #   NODE_IP          Jetson IP address                          (default: 192.168.1.50)
 
-.PHONY: all keys build-extensions build-kernel build-uki usb \
-        cluster-apply cluster-bootstrap cluster-gpu-libs cluster-ollama \
-        cluster-cdi \
+.PHONY: all keys build-extensions build-kernel uki usb \
+        cluster-apply cluster-bootstrap cluster-cdi \
         help clean
 
 # ── Default: build UKI + USB image ──────────────────────────────────────────
@@ -43,12 +42,6 @@ cluster-apply:
 cluster-bootstrap:
 	./scripts/05-bootstrap-cluster.sh
 
-cluster-gpu-libs:
-	./scripts/07-install-l4t-libs.sh
-
-cluster-ollama:
-	./scripts/06-deploy-ollama.sh
-
 cluster-cdi:
 	./scripts/10-setup-cdi.sh
 
@@ -59,7 +52,7 @@ clean:
 # ── Help ─────────────────────────────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "  Talos Linux — NVIDIA Jetson Orin NX"
+	@echo "  Talos Linux — NVIDIA Jetson Orin NX (reComputer J4012)"
 	@echo ""
 	@echo "  Build targets:"
 	@echo "    make all              Build UKI + USB image (default)"
@@ -72,9 +65,7 @@ help:
 	@echo "  Cluster targets:"
 	@echo "    make cluster-apply      Apply Talos machine config"
 	@echo "    make cluster-bootstrap  Bootstrap etcd + retrieve credentials"
-	@echo "    make cluster-gpu-libs   Install JetPack r36.5 userspace libraries (legacy)"
-	@echo "    make cluster-ollama     Deploy Ollama LLM server (legacy, hostPath)"
-	@echo "    make cluster-cdi        Deploy full CDI stack + Ollama (OOB GPU access)"
+	@echo "    make cluster-cdi        Deploy CDI stack (GPU access in pods)"
 	@echo ""
 	@echo "  Misc:"
 	@echo "    make clean            Remove dist/ and intermediate build output"
