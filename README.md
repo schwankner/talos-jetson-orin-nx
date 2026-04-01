@@ -305,7 +305,7 @@ jetson-test/                         ← git repository root
 ├── gpu-libs-restore.yaml            ← DaemonSet: auto-restore JetPack libs after full wipe
 │
 ├── logs/                            ← UART debug logs from boot sessions (committed)
-│   └── uart-run-1..9.log
+│   └── uart-run-1..12.log
 │
 └── dist/                            ← !! gitignored — build outputs
     └── uki-nvgpu5.1.0/
@@ -1794,7 +1794,7 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 | ~~`devfreq` governor missing~~ | ~~nvgpu requested `nvgpu_scaling` governor (L4T-specific, unavailable in Talos). Logged "Unable to find governor".~~ | **RESOLVED** — Patched in nvgpu 5.1.0: `nvgpu_scaling` → `simple_ondemand` (compiled into Talos kernel as `CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y`). |
 | `Can't initialize nvrm channel` at startup | Logged by Ollama's CUDA backend; libnvrm_gpu channel init has a non-fatal issue | Non-fatal: GPU channels ARE created (visible in nvgpu debugfs), inference works normally |
 | dustynv Ollama entrypoint exits | Default entrypoint starts `ollama serve` in background then exits → pod status "Completed" → restart loop | Override with `command: ["ollama", "serve"]` to keep process in foreground |
-| `apply-config` / `upgrade` breaks NVMe boot (signing key mismatch) | `apply-config --mode no-reboot` and `talosctl upgrade` silently replace the NVMe EFI UKI with a new build that has a **different random kernel signing key**. With `module.sig_enforce=1`, the `kernel-modules-clang` and `nvidia-tegra-nvgpu` extension modules are rejected → NVMe PCIe driver fails → STATE/META "missing" → maintenance mode. Symptom: `Loading of module with unavailable key is rejected` (x6) in UART log, then STATE/META both "waiting → missing". **Fix**: after every `apply-config`/upgrade, re-run the UKI copy pod from Section 7.5 to overwrite all NVMe UKIs with the USB UKI. Long-term fix: use reproducible signing key in custom-installer. | See Section 7.5 |
+| ~~`apply-config` / `upgrade` breaks NVMe boot (signing key mismatch)~~ | ~~`apply-config --mode no-reboot` and `talosctl upgrade` would silently embed a new random kernel signing key, causing all OOT modules (`nvme.ko`, `nvgpu.ko`, etc.) to be rejected at boot with `module.sig_enforce=1`. Root cause: `certs/Makefile` FORCE rule auto-regenerates `certs/signing_key.pem` on every fresh kernel build.~~ | **RESOLVED** — `CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"` (custom filename). `make` has no auto-gen rule for this name so our committed key (`74FD747A`) is always embedded. Verified in Boot 12: zero rejections, NVMe up at 13.7s. See Section 11.2. |
 | UEFI boot order required manual fix | By default, USB DataTraveler (Boot0008) was ahead of NVMe (Boot0009 "Talos Linux UKI") in UEFI boot order → always booted USB even when NVMe was fully configured. **Fixed** via `efibootmgr --bootorder 0009,0001,0008,…` (see Section 7.5). | Persists across reboots once set |
 | Single control-plane node | No HA, no etcd redundancy | By design; scale by adding worker nodes via `worker.yaml` |
 | Registry must be plain HTTP mirror | `10.0.10.24:5001` is HTTP-only; using `insecureSkipVerify: true` alone fails with "server gave HTTP response to HTTPS client". Use `mirrors` with `http://` endpoint instead | See Section 13 registry note |
