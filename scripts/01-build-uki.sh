@@ -35,10 +35,27 @@ mkdir -p "${OUT_DIR}"
 info "Checking signing keys..."
 bash "$(dirname "$0")/00-setup-keys.sh"
 
+# ── KEY MISMATCH WARNING ───────────────────────────────────────────────────────
+# The UKI kernel comes from custom-installer, but nvgpu modules are signed by
+# BuildKit. If custom-installer was built before 00-setup-keys.sh was run, or
+# if the signing key changed, modules will be rejected at boot with
+# "Loading of module with unavailable key is rejected".
+#
+# RULE: Whenever you rebuild nvgpu (run BuildKit), ALWAYS also rebuild
+# custom-installer using the NEW vmlinuz from the BuildKit output.
+# Use ./scripts/09-build-nvgpu.sh which does BOTH in the correct order.
+#
+# This script assumes custom-installer was already rebuilt correctly.
+# To rebuild everything from scratch: ./scripts/09-build-nvgpu.sh
+
 # ── 2. Build custom imager image with the LLVM/Clang kernel ──────────────────
 # The custom-installer registry image stores our LLVM kernel at vmlinuz.efi.
 # The stock imager only has the GCC kernel at vmlinuz, which cannot load
 # our sig_enforce=1 modules (different compiler = different signing key embedded).
+#
+# IMPORTANT: custom-installer MUST have been rebuilt with 09-build-nvgpu.sh
+# after any BuildKit nvgpu build. The kernel in custom-installer and the nvgpu
+# modules MUST share the same signing key (74FD747A...) or modules are rejected.
 #
 # We extract vmlinuz.efi from the custom-installer and override vmlinuz in the
 # stock imager image, then use that as the UKI builder.
@@ -46,21 +63,19 @@ info "Extracting LLVM kernel from custom-installer registry image..."
 KERNEL_DIR=$(mktemp -d)
 trap "rm -rf ${KERNEL_DIR}" EXIT
 
-# Iterate through registry layers; find the ~19 MB kernel layer (vmlinuz.efi)
-while IFS= read -r blob; do
-  SIZE=$(curl -sI "http://${REGISTRY}/v2/custom-installer/blobs/${blob}" \
-         | grep -i content-length | awk '{print $2}' | tr -d '\r')
-  if [[ "${SIZE:-0}" -gt 10000000 ]] && [[ "${SIZE:-0}" -lt 25000000 ]]; then
-    if curl -s "http://${REGISTRY}/v2/custom-installer/blobs/${blob}" \
-         | tar -xzf - -C "${KERNEL_DIR}" usr/install/arm64/vmlinuz.efi 2>/dev/null; then
-      break
-    fi
-  fi
-done < <(curl -s "http://${REGISTRY}/v2/custom-installer/manifests/${TALOS_VERSION}-${KERNEL_VERSION}" \
-         | python3 -c "import json,sys; [print(l['blobSum']) for l in json.load(sys.stdin).get('fsLayers',[])]")
+# Pull and extract kernel using docker (handles both Docker v2 and OCI manifest formats)
+docker pull --platform linux/arm64 \
+  "${REGISTRY_DOCKER}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}" >/dev/null 2>&1
 
-[[ -f "${KERNEL_DIR}/usr/install/arm64/vmlinuz.efi" ]] \
-  || error "LLVM kernel not found in custom-installer layers. Ensure custom-installer is up to date."
+CONTAINER_ID=$(docker create --platform linux/arm64 \
+  "${REGISTRY_DOCKER}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}" 2>/dev/null)
+mkdir -p "${KERNEL_DIR}/usr/install/arm64"
+docker cp "${CONTAINER_ID}:/usr/install/arm64/vmlinuz.efi" \
+  "${KERNEL_DIR}/usr/install/arm64/vmlinuz.efi" 2>/dev/null \
+  || docker cp "${CONTAINER_ID}:/usr/install/arm64/vmlinuz" \
+       "${KERNEL_DIR}/usr/install/arm64/vmlinuz.efi" 2>/dev/null \
+  || error "LLVM kernel not found in custom-installer. Run ./scripts/09-build-nvgpu.sh first."
+docker rm "${CONTAINER_ID}" >/dev/null 2>&1
 
 info "  Kernel: $(ls -lh ${KERNEL_DIR}/usr/install/arm64/vmlinuz.efi | awk '{print $5, $6, $7, $8}')"
 
