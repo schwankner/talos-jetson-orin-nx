@@ -2,11 +2,11 @@
 #
 # All targets are thin wrappers around the scripts/ directory.
 # Environment variables override defaults in scripts/common.sh:
-#   REGISTRY         local OCI registry reachable from Jetson  (default: 10.0.10.24:5001)
+#   REGISTRY         local OCI registry reachable from Jetson  (default: 192.168.1.100:5001)
 #   TALOS_VERSION    Talos release                              (default: v1.12.6)
 #   KERNEL_VERSION   Linux kernel version                       (default: 6.18.18)
 #   NVGPU_VERSION    nvidia-tegra-nvgpu extension version       (default: 5.1.0)
-#   NODE_IP          Jetson IP address                          (default: 10.0.10.38)
+#   NODE_IP          Jetson IP address                          (default: 192.168.1.50)
 
 .PHONY: all keys build-extensions build-kernel build-uki usb \
         cluster-apply cluster-bootstrap cluster-gpu-libs cluster-ollama \
@@ -80,7 +80,7 @@ help:
 	@echo "    make clean            Remove dist/ and intermediate build output"
 	@echo ""
 	@echo "  Key overrides:"
-	@echo "    REGISTRY=<host:port>  Local OCI registry (default: 10.0.10.24:5001)"
+	@echo "    REGISTRY=<host:port>  Local OCI registry (default: 192.168.1.100:5001)"
 	@echo "    NVGPU_VERSION=<ver>   nvgpu extension version (default: 5.1.0)"
-	@echo "    NODE_IP=<ip>          Jetson node IP (default: 10.0.10.38)"
+	@echo "    NODE_IP=<ip>          Jetson node IP (default: 192.168.1.50)"
 	@echo ""

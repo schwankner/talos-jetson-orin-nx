@@ -24,7 +24,7 @@
 #
 # Apply (once; requires node reboot to take effect):
 #   talosctl apply-config \
-#     --nodes 10.0.10.38 \
+#     --nodes 192.168.1.50 \
 #     --patch @manifests/talos/machine-patch-cdi.yaml \
 #     --mode staged
 #
