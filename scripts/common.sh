@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # common.sh — shared variables for all build scripts
+# shellcheck disable=SC2034  # Variables are used by scripts that source this file
 set -euo pipefail
 
 # ── Registry ────────────────────────────────────────────────────────────────
