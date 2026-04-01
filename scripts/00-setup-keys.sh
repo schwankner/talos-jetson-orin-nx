@@ -9,12 +9,20 @@
 # Key lifecycle:
 #   • First run  : generates a fresh RSA-4096 key pair → saved to keys/
 #   • Later runs : loads existing keys from keys/ (no regeneration)
-#   • New key    : rm keys/signing_key.pem && ./scripts/00-setup-keys.sh
+#   • New key    : FORCE_NEW_KEY=1 ./scripts/00-setup-keys.sh
 #
-# After running this script the keys are copied to the two places the
-# BuildKit stages expect them:
-#   1. talos-pkgs/kernel/build/certs/   → kernel embeds the public key
-#   2. talos-pkgs/nvidia-tegra-nvgpu/   → nvgpu modules are signed with it
+# WHY talos_signing_key.pem (not signing_key.pem):
+#   The Linux kernel's certs/Makefile has an auto-generation rule for the
+#   *exact* filename "certs/signing_key.pem". On every cache-miss build it
+#   regenerates this file with a random key, overwriting our copy.
+#   Using a different filename (talos_signing_key.pem) bypasses this rule —
+#   make never touches it, so our key persists through the entire build.
+#
+# After running this script the keys are copied to the places BuildKit expects:
+#   1. talos-pkgs/kernel/build/certs/talos_signing_key.{pem,x509}
+#      → CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem" embeds it in kernel
+#   2. talos-pkgs/nvidia-tegra-nvgpu/signing_key.{pem,x509}
+#      → nvgpu pkg.yaml signs modules with it
 #
 # Usage:
 #   ./scripts/00-setup-keys.sh               # ensure keys exist, copy to build dirs
@@ -63,9 +71,13 @@ fi
 
 # ── 3. Copy keys to talos-pkgs build directories ──────────────────────────────
 if [[ -d "${KERNEL_CERTS_DIR}" ]]; then
-  cp "${KEY_PEM}"  "${KERNEL_CERTS_DIR}/signing_key.pem"
-  cp "${KEY_X509}" "${KERNEL_CERTS_DIR}/signing_key.x509"
-  info "Keys copied to ${KERNEL_CERTS_DIR}/"
+  # Copy as talos_signing_key.pem — the filename referenced by CONFIG_MODULE_SIG_KEY.
+  # The kernel's certs/Makefile auto-generates "signing_key.pem" on every fresh build,
+  # overwriting any copy we place there. "talos_signing_key.pem" has no auto-gen rule,
+  # so make never touches it and our key is always embedded in the kernel.
+  cp "${KEY_PEM}"  "${KERNEL_CERTS_DIR}/talos_signing_key.pem"
+  cp "${KEY_X509}" "${KERNEL_CERTS_DIR}/talos_signing_key.x509"
+  info "Keys copied to ${KERNEL_CERTS_DIR}/talos_signing_key.{pem,x509}"
 else
   warn "Kernel certs dir not found: ${KERNEL_CERTS_DIR}"
   warn "Clone talos-pkgs to /tmp/talos-pkgs and run this script again before building."
