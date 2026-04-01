@@ -415,8 +415,8 @@ docker buildx build \
 | `Pkgfile` | Add `LLVM_IMAGE: ghcr.io/siderolabs/llvm` and `LLVM_REV: v1.14.0-alpha.0`; update all LLVM references |
 | `kernel/build/pkg.yaml` | Use `LLVM=1 LLVM_IAS=1` in all make invocations; run `make olddefconfig LLVM=1` |
 | `kernel/build/config-arm64` | Enable module signing with reproducible key (see below) |
-| `kernel/build/certs/signing_key.pem` | Copy from `keys/signing_key.pem` (see `00-setup-keys.sh`) |
-| `kernel/build/certs/signing_key.x509` | Copy from `keys/signing_key.x509` |
+| `kernel/build/certs/talos_signing_key.pem` | Copy from `keys/signing_key.pem` (see `00-setup-keys.sh`) |
+| `kernel/build/certs/talos_signing_key.x509` | Copy from `keys/signing_key.x509` |
 | `kernel/build/scripts/filter-hardened-check.py` | Add Clang-specific exceptions for `CC_HAS_*` checks |
 
 **`config-arm64` changes** (module signing with reproducible key — **NOT disabled**):
@@ -430,11 +430,19 @@ between kernel and extension builds, Talos boots into maintenance mode (no NVMe,
 CONFIG_MODULE_SIG=y
 CONFIG_MODULE_SIG_ALL=y
 CONFIG_MODULE_SIG_FORCE=y
-CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"
+CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"
 ```
 
-Run `./scripts/00-setup-keys.sh` before any kernel or extension build to ensure the key
-is in place. Keys are persisted in `keys/` and committed to the repository.
+**Critical**: the filename is `talos_signing_key.pem`, **not** `signing_key.pem`.
+The Linux kernel's `certs/Makefile` has an auto-generation rule for the exact filename
+`signing_key.pem` with a `FORCE` dependency — it regenerates a random key on every
+cache-miss build, overwriting any file we place there. Using a custom filename
+bypasses this rule entirely. The `make` build has no knowledge of `talos_signing_key.pem`
+and will never touch it.
+
+`00-setup-keys.sh` copies `keys/signing_key.pem` → `certs/talos_signing_key.pem`.
+`09-build-nvgpu.sh` verifies the serial matches after each build. Keys are committed
+to `keys/` and are the single source of truth for all module signing.
 
 ### 6.3 nvidia-tegra-nvgpu Extension
 
@@ -1099,19 +1107,22 @@ boots into maintenance mode with 6 kernel module rejections in dmesg, no NVMe, n
 signing key is ephemeral — created during the kernel build and destroyed afterward.
 Third-party modules cannot be signed with it.
 
-**Root cause (after enabling signing)**: Key mismatch. If a new random key is generated
-between the kernel build and the extension build, the modules carry the new key's signature
-but the running kernel only trusts the old key. Result: all out-of-tree modules are rejected
-→ NVMe disappears → no STATE partition → maintenance mode → no IP.
+**Root cause (after enabling signing)**: Key mismatch. The Linux kernel's `certs/Makefile`
+contains an auto-generation rule for the filename `signing_key.pem` with a `FORCE`
+dependency. On every cache-miss build, `make` regenerates this file with a new random key,
+overwriting any key we had placed there. Modules signed with our committed key are then
+rejected by a kernel that embedded the newly generated random key.
 
-**Fix**: Module signing **enabled** with a **reproducible, committed key**:
+**Fix**: `CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"` — a custom filename that
+`make` has no auto-generation rule for. The file is never touched by `make`.
 
 1. `./scripts/00-setup-keys.sh` generates an RSA-4096 key pair on first run and saves it
-   to `keys/signing_key.pem` + `keys/signing_key.x509`.
+   to `keys/signing_key.pem` + `keys/signing_key.x509`. On subsequent runs it reuses
+   the existing key (no regeneration unless `FORCE_NEW_KEY=1`).
 2. The key is **committed to the repository** (it's a throw-away build key, not a secret).
-3. Every subsequent run reuses the same key — no regeneration unless `FORCE_NEW_KEY=1`.
-4. Before each kernel or extension build, `00-setup-keys.sh` copies the keys into the
-   talos-pkgs build directories.
+3. `00-setup-keys.sh` copies it as `certs/talos_signing_key.pem` to the kernel build dir.
+   Since `make` has no rule for this filename, it persists untouched through the build.
+4. `09-build-nvgpu.sh` verifies `talos_signing_key.x509` serial after every kernel build.
 
 **Key lifecycle**:
 
@@ -1119,7 +1130,7 @@ but the running kernel only trusts the old key. Result: all out-of-tree modules 
 # Normal usage — generate once, reuse forever:
 ./scripts/00-setup-keys.sh
 
-# Force new key (BREAKING — requires rebuild of kernel + all extensions):
+# Force new key (BREAKING — requires rebuild of kernel + ALL extensions):
 FORCE_NEW_KEY=1 ./scripts/00-setup-keys.sh
 
 # Check the key serial embedded in your running kernel:
