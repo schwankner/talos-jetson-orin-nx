@@ -1,5 +1,18 @@
 name: Build USB Image
 
+# Assembles a bootable USB image from extension images already in ghcr.io.
+# Fast (~10 min). Runs on a standard x86_64 runner.
+#
+# Prerequisites: extension images must be in ghcr.io/<owner>/:
+#   - nvidia-tegra-nvgpu:<nvgpu_version>-<kernel_version>-talos
+#   - nvidia-firmware-ext:v5
+#   - kernel-modules-clang:<version>-<kernel_version>-talos
+#   - custom-installer:v<talos_version>-<kernel_version>
+#
+# Push extensions once via:
+#   REGISTRY=ghcr.io/<owner> REGISTRY_DOCKER=ghcr.io/<owner> make build-extensions
+# Or trigger the "Build Extensions (ARM64)" workflow if you have ARM64 runners.
+
 on:
   push:
     tags:
@@ -7,119 +20,22 @@ on:
   workflow_dispatch:
     inputs:
       talos_version:
-        description: 'Talos version override (blank = use common.sh default)'
+        description: 'Talos version override (blank = common.sh default)'
         required: false
         default: ''
       nvgpu_version:
-        description: 'nvgpu extension version override (blank = use common.sh default)'
+        description: 'nvgpu version override (blank = common.sh default)'
         required: false
         default: ''
-      force_rebuild_extensions:
-        description: 'Force rebuild extensions even if cached (true/false)'
-        required: false
-        default: 'false'
 
 concurrency:
   group: build-usb-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ──────────────────────────────────────────────────────────────────────────
-  # Job 1 — Build + push extension images to ghcr.io  (slow, cached by SHA)
-  #
-  # Requires an ARM64 runner (ubuntu-24.04-arm).
-  # ARM64 runners are available for public repos with GitHub Team/Enterprise.
-  # If you get startup_failure, build extensions locally and push to ghcr.io:
-  #   REGISTRY=ghcr.io/<owner> REGISTRY_DOCKER=ghcr.io/<owner> make build-extensions
-  # Then re-run this workflow — Job 1 will be auto-skipped (images already cached).
-  # ──────────────────────────────────────────────────────────────────────────
-  build-extensions:
-    name: Build extensions (ARM64)
-    runs-on: ubuntu-24.04-arm
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      skipped: ${{ steps.check_cache.outputs.exists }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check if extension images already exist in ghcr.io
-        id: check_cache
-        run: |
-          source scripts/common.sh
-          NVGPU="${NVGPU_VERSION:-5.1.0}"
-          KERNEL="${KERNEL_VERSION:-6.18.18}"
-          IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU}-${KERNEL}-talos"
-          FORCE="${{ inputs.force_rebuild_extensions }}"
-          if [[ "${FORCE}" != "true" ]] && \
-             docker manifest inspect "${IMAGE}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "✓ Extension ${IMAGE} already in ghcr.io — skipping build"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Extension not cached — will build"
-          fi
-
-      - name: Set up Docker Buildx
-        if: steps.check_cache.outputs.exists != 'true'
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
-
-      - name: Restore signing keys
-        if: steps.check_cache.outputs.exists != 'true'
-        run: |
-          mkdir -p keys
-          printf '%s' "${{ secrets.SIGNING_KEY_PEM }}"  > keys/signing_key.pem
-          printf '%s' "${{ secrets.SIGNING_KEY_X509 }}" > keys/signing_key.x509
-          chmod 600 keys/signing_key.pem
-          openssl x509 -in keys/signing_key.x509 -noout -serial
-
-      - name: Free disk space for kernel build
-        if: steps.check_cache.outputs.exists != 'true'
-        run: |
-          sudo apt-get remove -y --purge \
-            '^dotnet-.*' '^llvm-.*' '^php.*' '^mongodb-.*' \
-            azure-cli google-cloud-sdk google-chrome-stable firefox \
-            2>/dev/null || true
-          sudo apt-get autoremove -y 2>/dev/null || true
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          df -h /
-
-      - name: Build + push extensions to ghcr.io
-        if: steps.check_cache.outputs.exists != 'true'
-        run: |
-          make build-extensions
-        timeout-minutes: 120
-        env:
-          REGISTRY: ghcr.io/${{ github.repository_owner }}
-          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
-          TALOS_VERSION: ${{ inputs.talos_version || '' }}
-          NVGPU_VERSION: ${{ inputs.nvgpu_version || '' }}
-
-  # ──────────────────────────────────────────────────────────────────────────
-  # Job 2 — Assemble UKI + USB image from ghcr.io extension images
-  #
-  # Fast (~10 min). Runs on standard x86_64 runner.
-  # Pulls ARM64 extension images from ghcr.io, builds UKI via Talos imager,
-  # wraps it as a bootable raw disk image.
-  # Runs even when Job 1 was skipped (images already cached).
-  # ──────────────────────────────────────────────────────────────────────────
   build-usb:
     name: Assemble UKI + USB image
     runs-on: ubuntu-latest
-    needs: build-extensions
-    if: always() && (needs.build-extensions.result == 'success' || needs.build-extensions.result == 'skipped')
     permissions:
       contents: write
       packages: read
@@ -197,11 +113,11 @@ jobs:
 
             ### Included extensions
 
-            | Extension | Registry |
+            | Extension | Tag |
             |---|---|
-            | `nvidia-tegra-nvgpu` | `ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu` |
-            | `nvidia-firmware-ext` | `ghcr.io/${{ github.repository_owner }}/nvidia-firmware-ext:v5` |
-            | `kernel-modules-clang` | `ghcr.io/${{ github.repository_owner }}/kernel-modules-clang` |
+            | `nvidia-tegra-nvgpu` | `${{ env.NVGPU_VERSION || '5.1.0' }}-6.18.18-talos` |
+            | `nvidia-firmware-ext` | `v5` |
+            | `kernel-modules-clang` | `1.1.0-6.18.18-talos` |
 
             See [README](https://github.com/${{ github.repository }}#readme) for full setup instructions.
           files: ${{ steps.img.outputs.path }}
