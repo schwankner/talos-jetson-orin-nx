@@ -1,0 +1,136 @@
+---
+# Ollama deployment — CDI-based GPU access (OOB, no manual lib mounts required)
+#
+# This manifest is the CDI successor to ollama-deployment.yaml.  It relies on
+# the Container Device Interface stack set up by:
+#
+#   manifests/gpu/cdi-setup.yaml      — writes /var/run/cdi/nvidia-jetson.yaml
+#   manifests/gpu/device-plugin.yaml  — exposes nvidia.com/gpu resource
+#   manifests/talos/machine-patch-cdi.yaml — enables CDI in containerd
+#
+# How it works:
+#   1. Pod requests resources.limits.nvidia.com/gpu: "1"
+#   2. nvidia-device-plugin AllocateResponse returns CDI device ID "nvidia.com/gpu=0"
+#   3. containerd reads /var/run/cdi/nvidia-jetson.yaml and automatically injects:
+#        • All nvgpu + nvhost device nodes
+#        • /var/lib/nvidia-tegra-libs/tegra → /usr/lib/aarch64-linux-gnu/nvidia (bind)
+#        • LD_LIBRARY_PATH pointing at the JetPack r36.5 libs
+#   4. Ollama starts — CUDA init finds real libs and GPU devices; no extra steps needed
+#
+# Compared to ollama-deployment.yaml this manifest has:
+#   ✓  No initContainer (firmware + symlink handled by nvidia-cdi-setup DaemonSet)
+#   ✓  No hostPath volume for /dev
+#   ✓  No hostPath volume for JetPack libs
+#   ✓  No manually set LD_LIBRARY_PATH
+#   ✓  No manually set privileged (still set for safety; may be removed after verification)
+#
+# Upgrade path:
+#   kubectl delete -f manifests/ollama/ollama-deployment.yaml
+#   kubectl apply  -f manifests/ollama/ollama-cdi.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ollama
+  labels:
+    # Required so containerd's pod-security webhook allows the privileged securityContext
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
+---
+# Persistent storage for Ollama models on NVMe EPHEMERAL partition
+# /var is mounted from /dev/nvme0n1p4 (125 GB available)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ollama-models-pv
+spec:
+  capacity:
+    storage: 80Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /var/lib/ollama-models
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+  namespace: ollama
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 80Gi
+  volumeName: ollama-models-pv
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: ollama
+          image: dustynv/ollama:r36.4.0
+          imagePullPolicy: IfNotPresent
+          command: ["ollama", "serve"]
+          ports:
+            - containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            - name: OLLAMA_MODELS
+              value: "/models"
+            - name: OLLAMA_FLASH_ATTENTION
+              value: "1"
+            # LD_LIBRARY_PATH is injected automatically by the CDI spec.
+            # No manual env override needed.
+          resources:
+            requests:
+              memory: 2Gi
+            limits:
+              memory: 14Gi
+              # ← CDI triggers here: device plugin returns "nvidia.com/gpu=0",
+              #   containerd injects all devices + lib mount + LD_LIBRARY_PATH.
+              nvidia.com/gpu: "1"
+          securityContext:
+            # privileged is kept for initial CDI verification.
+            # Once confirmed working, this can be replaced with fine-grained
+            # capabilities (e.g. SYS_ADMIN is not needed; devices come from CDI).
+            privileged: true
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: ollama
+spec:
+  type: NodePort
+  selector:
+    app: ollama
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      nodePort: 31434

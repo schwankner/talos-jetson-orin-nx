@@ -10,6 +10,7 @@
 
 .PHONY: all keys build-extensions build-kernel build-uki usb \
         cluster-apply cluster-bootstrap cluster-gpu-libs cluster-ollama \
+        cluster-cdi \
         help clean
 
 # ── Default: build UKI + USB image ──────────────────────────────────────────
@@ -48,6 +49,9 @@ cluster-gpu-libs:
 cluster-ollama:
 	./scripts/06-deploy-ollama.sh
 
+cluster-cdi:
+	./scripts/10-setup-cdi.sh
+
 # ── Clean build outputs (not committed anyway) ───────────────────────────────
 clean:
 	rm -rf dist/ imager-out-*/
@@ -68,8 +72,9 @@ help:
 	@echo "  Cluster targets:"
 	@echo "    make cluster-apply      Apply Talos machine config"
 	@echo "    make cluster-bootstrap  Bootstrap etcd + retrieve credentials"
-	@echo "    make cluster-gpu-libs   Install JetPack r36.5 userspace libraries"
-	@echo "    make cluster-ollama     Deploy Ollama LLM server with GPU"
+	@echo "    make cluster-gpu-libs   Install JetPack r36.5 userspace libraries (legacy)"
+	@echo "    make cluster-ollama     Deploy Ollama LLM server (legacy, hostPath)"
+	@echo "    make cluster-cdi        Deploy full CDI stack + Ollama (OOB GPU access)"
 	@echo ""
 	@echo "  Misc:"
 	@echo "    make clean            Remove dist/ and intermediate build output"
