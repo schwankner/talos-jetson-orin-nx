@@ -5,7 +5,7 @@
 [![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
 [![nvgpu](https://img.shields.io/badge/nvgpu-5.1.0-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
-[![CI](https://github.com/YOUR_ORG/talos-jetson-orin-nx/actions/workflows/ci.yaml/badge.svg)](https://github.com/YOUR_ORG/talos-jetson-orin-nx/actions/workflows/ci.yaml)
+[![CI](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/ci.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/ci.yaml)
 
 Run [Talos Linux](https://www.talos.dev/) on the **NVIDIA Jetson Orin NX** with full CUDA
 GPU compute support in Kubernetes pods. This repository provides everything needed:
@@ -73,6 +73,7 @@ GPU compute support in Kubernetes pods. This repository provides everything need
     - [12.6 CUDA Error 999 — nvhost syncpoint](#126-cuda-error-999-cudastreamsynchronize--nvhost-syncpoint)
     - [12.7 devfreq Governor / governor_pod_scaling.ko](#127-devfreq-governor--governor_pod_scalingko-fixed-boot-15)
     - [12.8 CDI Stack Bugs — containerd 2.x + Custom Device Plugin](#128-cdi-stack-bugs--containerd-2x--custom-device-plugin)
+    - [12.9 UBSAN: array-index-out-of-bounds in netlist.c (Non-fatal)](#129-ubsan-array-index-out-of-bounds-in-netlistc614617-non-fatal-known-upstream-bug)
 13. [Running Ollama with GPU Acceleration](#13-running-ollama-with-gpu-acceleration)
     - [13.1 CDI Stack (Recommended — OOB GPU access)](#131-cdi-stack-recommended--oob-gpu-access)
     - [13.2 Legacy hostPath Approach](#132-legacy-hostpath-approach)
@@ -92,13 +93,13 @@ all defaults (registry, versions, node IP). Scripts are idempotent and CI-compat
 
 | Variable | Default | Description |
 |---|---|---|
-| `REGISTRY` | `10.0.10.24:5001` | Local OCI registry (reachable from Jetson) |
+| `REGISTRY` | `192.168.1.100:5001` | Local OCI registry (reachable from Jetson) |
 | `REGISTRY_DOCKER` | `host.docker.internal:5001` | Registry as seen from inside Docker |
 | `TALOS_VERSION` | `v1.12.6` | Talos release |
 | `KERNEL_VERSION` | `6.18.18` | Kernel version (must match extensions) |
 | `NVGPU_VERSION` | `5.1.0` | nvgpu extension version to use |
 | `FIRMWARE_EXT_TAG` | `v5` | nvidia-firmware-ext tag |
-| `NODE_IP` | `10.0.10.38` | Jetson node IP |
+| `NODE_IP` | `192.168.1.50` | Jetson node IP |
 | `NODE_HOSTNAME` | `talos-smq-3hh` | Kubernetes node name |
 
 ### Signing Key Setup (once per repo clone)
@@ -205,7 +206,7 @@ siderolabs/pkgs (commit a92bed5, branch release-1.12)
                                                     ▼
                               ┌─────────────────────────────────────┐
                               │          Local OCI Registry          │
-                              │         (10.0.10.24:5001)           │
+                              │         (192.168.1.100:5001)           │
                               │                                     │
                               │  custom-installer:v1.12.6-6.18.18  │
                               │  nvidia-tegra-nvgpu:5.1.0-...      │
@@ -225,7 +226,7 @@ siderolabs/pkgs (commit a92bed5, branch release-1.12)
                               ▼
                     Flash to NVMe via USB boot
                     ────────────────────────►
-                    Jetson Orin NX @ 10.0.10.38
+                    Jetson Orin NX @ 192.168.1.50
                     Kubernetes single-node cluster
                     CUDA: cuInit=0 ✓
 ```
@@ -382,7 +383,7 @@ talos-jetson-orin-nx/
 - **macOS** with [Colima](https://github.com/abiosoft/colima) — arm64 VM, ≥ 80 GB disk
 - Docker with BuildKit, a `talos-builder` buildx instance backed by Colima
 - Local OCI registry on port 5001 (accessible as `host.docker.internal:5001` from Docker,
-  as `10.0.10.24:5001` from the Jetson)
+  as `192.168.1.100:5001` from the Jetson)
 - `talosctl` v1.12.x (`brew install siderolabsio/tap/talosctl`)
 
 ### Colima Setup
@@ -407,7 +408,7 @@ docker buildx create --name talos-builder --driver docker-container --use
 docker run -d --name registry --restart=always -p 5001:5000 registry:2
 
 # Verify accessible from both Mac and Jetson
-curl http://10.0.10.24:5001/v2/_catalog
+curl http://192.168.1.100:5001/v2/_catalog
 ```
 
 ---
@@ -436,7 +437,7 @@ curl http://10.0.10.24:5001/v2/_catalog
 ### 7.1 Local Registry Setup
 
 All custom images are stored in the local OCI registry. The Colima Docker daemon accesses
-it as `host.docker.internal:5001`; the Jetson accesses it as `10.0.10.24:5001`.
+it as `host.docker.internal:5001`; the Jetson accesses it as `192.168.1.100:5001`.
 
 ```bash
 docker run -d --name registry --restart=always -p 5001:5000 registry:2
@@ -505,8 +506,9 @@ to `keys/` and are the single source of truth for all module signing.
 
 Contains: `nvgpu.ko`, `host1x.ko`, and supporting modules for the Jetson Orin NX GPU.
 
-**Current version**: 5.1.0 — includes devfreq governor patch (`nvgpu_scaling` → `simple_ondemand`)
-applied via `sed` in `nvidia-tegra-nvgpu/pkg.yaml` before compilation.
+**Current version**: 5.1.0 — includes devfreq `governor_pod_scaling.ko` build fix: two missing
+`ccflags-y` include paths added to `nvidia-oot/drivers/devfreq/Makefile` in `pkg.yaml` prepare
+step. `nvhost_podgov` governor loads on boot; dynamic freq scaling 306–918 MHz active (Boot 15).
 
 #### Build from pkgs
 
@@ -534,7 +536,7 @@ metadata:
   name: nvidia-tegra-nvgpu
   version: 5.1.0-6.18.18-talos
   author: custom-build
-  description: NVIDIA nvgpu GPU driver for Jetson Orin NX (OE4T patches-r36.5, Clang build, devfreq fix)
+  description: NVIDIA nvgpu GPU driver for Jetson Orin NX (OE4T patches-r36.5, Clang build, devfreq ccflags fix)
   compatibility:
     talos:
       version: ">= 1.12.6"
@@ -780,7 +782,7 @@ accepts `apply-config` without authentication.
 4. Verify maintenance mode from the Mac:
 
 ```bash
-talosctl --endpoints 10.0.10.38 --nodes 10.0.10.38 --insecure version
+talosctl --endpoints 192.168.1.50 --nodes 192.168.1.50 --insecure version
 ```
 
 **Success** — maintenance mode:
@@ -800,12 +802,12 @@ error getting version: rpc error: code = Unavailable desc = ... tls: certificate
 ### 8.2 Apply Machine Config
 
 ```bash
-talosctl --nodes 10.0.10.38 --endpoints 10.0.10.38 --insecure \
+talosctl --nodes 192.168.1.50 --endpoints 192.168.1.50 --insecure \
   apply-config --file manifests/talos/controlplane.yaml.example
 ```
 
 Talos will now:
-1. Pull `custom-installer:v1.12.6-6.18.18` from `10.0.10.24:5001`
+1. Pull `custom-installer:v1.12.6-6.18.18` from `192.168.1.100:5001`
 2. Pull the three extension images
 3. Wipe `/dev/nvme0n1` (because `wipe: true` in config)
 4. Install Talos + extensions to NVMe
@@ -819,12 +821,12 @@ once** per fresh cluster install:
 ```bash
 # Poll until API is available
 until talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
-  --endpoints 10.0.10.38 --nodes 10.0.10.38 version &>/dev/null; do
+  --endpoints 192.168.1.50 --nodes 192.168.1.50 version &>/dev/null; do
   echo "waiting..."; sleep 10
 done
 
 talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
-  --nodes 10.0.10.38 --endpoints 10.0.10.38 \
+  --nodes 192.168.1.50 --endpoints 192.168.1.50 \
   bootstrap
 ```
 
@@ -838,7 +840,7 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 ```bash
 # Kubeconfig for kubectl
 talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
-  --nodes 10.0.10.38 --endpoints 10.0.10.38 \
+  --nodes 192.168.1.50 --endpoints 192.168.1.50 \
   kubeconfig ~/PycharmProjects/jetson-test/kubeconfig
 
 # Also keep a copy in talos-jetson/
@@ -972,7 +974,7 @@ Key sections explained:
 machine:
   install:
     disk: /dev/nvme0n1             # Install target — NVMe (NOT the USB drive /dev/sda)
-    image: 10.0.10.24:5001/custom-installer:v1.12.6-6.18.18
+    image: 192.168.1.100:5001/custom-installer:v1.12.6-6.18.18
     wipe: true                     # Wipe NVMe on install (ensures clean state)
     # !! DO NOT set grubUseUKICmdline: true on arm64/Jetson !!
     # That flag is for legacy x86 GRUB only. On arm64 with UKI+systemd-boot, it causes
@@ -982,23 +984,23 @@ machine:
     # the custom-installer image (set via imager profile cmdline.append).
     extensions:
       # Clang-compiled kernel modules (replaces GCC-compiled defaults)
-      - image: 10.0.10.24:5001/kernel-modules-clang:1.1.0-6.18.18-talos
-      # NVIDIA GPU driver (nvgpu.ko, host1x.ko) — 5.1.0 adds devfreq governor fix
-      - image: 10.0.10.24:5001/nvidia-tegra-nvgpu:5.1.0-6.18.18-talos
+      - image: 192.168.1.100:5001/kernel-modules-clang:1.1.0-6.18.18-talos
+      # NVIDIA GPU driver (nvgpu.ko, host1x.ko) — 5.1.0 adds devfreq ccflags fix (governor_pod_scaling.ko)
+      - image: 192.168.1.100:5001/nvidia-tegra-nvgpu:5.1.0-6.18.18-talos
       # GA10B firmware blobs at /usr/lib/firmware/ga10b/ — v5 adds pmu_pkc_prod_sig.bin
-      - image: 10.0.10.24:5001/nvidia-firmware-ext:v5
+      - image: 192.168.1.100:5001/nvidia-firmware-ext:v5
 
   registries:
     mirrors:
-      10.0.10.24:5001:
+      192.168.1.100:5001:
         endpoints:
-          - "http://10.0.10.24:5001"  # Plain HTTP — must use mirrors, NOT config.tls!
+          - "http://192.168.1.100:5001"  # Plain HTTP — must use mirrors, NOT config.tls!
     # !! DO NOT add config.tls.insecureSkipVerify for an HTTP registry !!
     # insecureSkipVerify=true still tries HTTPS → "server gave HTTP response to HTTPS client"
     # Using both mirrors+config.tls → "TLS config specified for non-HTTPS registry"
 
 cluster:
-  endpoint: https://10.0.10.38:6443
+  endpoint: https://192.168.1.50:6443
 ```
 
 > **`grubUseUKICmdline: true`** explanation: When applying config while booted from the
@@ -1079,15 +1081,15 @@ Then reflash the modified raw image with `sudo dd`.
 TC=~/PycharmProjects/jetson-test/talosconfig
 
 # nvgpu module is loaded
-talosctl --talosconfig $TC --nodes 10.0.10.38 \
+talosctl --talosconfig $TC --nodes 192.168.1.50 \
   read /proc/modules | grep nvgpu
 
 # No ELOOP errors — firmware loaded successfully
-talosctl --talosconfig $TC --nodes 10.0.10.38 \
+talosctl --talosconfig $TC --nodes 192.168.1.50 \
   dmesg | grep -E "nvgpu|ga10b|firmware_class" | tail -30
 
 # firmware_class.path is set to the correct value
-talosctl --talosconfig $TC --nodes 10.0.10.38 \
+talosctl --talosconfig $TC --nodes 192.168.1.50 \
   read /sys/module/firmware_class/parameters/path
 # Expected output: /usr/lib/firmware
 ```
@@ -1098,13 +1100,13 @@ talosctl --talosconfig $TC --nodes 10.0.10.38 \
 KC=~/PycharmProjects/jetson-test/kubeconfig
 
 kubectl --kubeconfig $KC run cuda-check \
-  --image=10.0.10.24:5001/cuda-device-check:v1 \
+  --image=192.168.1.100:5001/cuda-device-check:v1 \
   --restart=Never \
   --overrides='{
     "spec": {
       "containers": [{
         "name": "cuda-check",
-        "image": "10.0.10.24:5001/cuda-device-check:v1",
+        "image": "192.168.1.100:5001/cuda-device-check:v1",
         "securityContext": {"privileged": true},
         "volumeMounts": [{"name":"dev","mountPath":"/dev"}]
       }],
@@ -1191,7 +1193,7 @@ rejected by a kernel that embedded the newly generated random key.
 FORCE_NEW_KEY=1 ./scripts/00-setup-keys.sh
 
 # Check the key serial embedded in your running kernel:
-talosctl -n 10.0.10.38 read /proc/keys | grep -i asymmetric
+talosctl -n 192.168.1.50 read /proc/keys | grep -i asymmetric
 ```
 
 **Key serial** (current, committed): `74FD747A092BD42575ED4CBE6F7E2479A6FEC740`
@@ -1438,6 +1440,79 @@ printf '        - path: /dev/nvhost-ctrl\n          hostPath: /dev/nvgpu/igpu0/c
 This injects the real device node at `/dev/nvgpu/igpu0/ctrl` as `/dev/nvhost-ctrl` inside
 the container — exactly what `libcuda.so.1.1` needs.
 
+### 12.9 UBSAN: array-index-out-of-bounds in netlist.c:614/617 (Non-fatal, known upstream bug)
+
+**Status: KNOWN — non-fatal, no workaround needed.** No upstream GitHub issue exists as of 2026-04-01.
+
+Every time a process first opens the GPU device (e.g. Ollama at startup), the kernel logs
+two UBSAN reports followed by successful GPU init:
+
+```
+[  132.985966] UBSAN: array-index-out-of-bounds in common/netlist/netlist.c:614:15
+[  132.985973] index 1 is out of range for type 'struct netlist_region[1]'
+[  133.156849] UBSAN: array-index-out-of-bounds in common/netlist/netlist.c:617:6
+[  133.156852] index 1 is out of range for type 'struct netlist_region[1]'
+...
+[  133.472087] nvgpu: 17000000.gpu  gk20a_scale_init:541  [INFO]  enabled scaling for GPU
+```
+
+#### Root cause (in OE4T linux-nvgpu d530a48 / patches-r36.5)
+
+The struct `netlist_image` in
+`drivers/gpu/nvgpu/common/netlist/netlist_priv.h` uses the classic
+**C89 "struct hack"** (trailing array of size 1 as a flexible array workaround):
+
+```c
+struct netlist_image {
+    struct netlist_image_header header;   // header.regions = actual region count (> 1)
+    struct netlist_region regions[1];     // ← declared size 1, but firmware has N regions
+};
+```
+
+The loop in `nvgpu_netlist_init_ctx_vars()` (`netlist.c:612`):
+
+```c
+for (i = 0; i < netlist->header.regions; i++) {
+    u8 *src = ((u8 *)netlist + netlist->regions[i].data_offset);  // ← UBSAN fires for i >= 1
+    u32 size = netlist->regions[i].data_size;                     // ← UBSAN fires for i >= 1
+    ...
+}
+```
+
+The GA10B firmware blob contains more than one netlist region, so `i` reaches 1 and beyond.
+UBSAN catches `regions[1]` as out-of-bounds for a `[1]`-element array — but the memory
+access is **functionally valid** because the firmware is a flat binary blob and the pointer
+arithmetic is correct. The code predates UBSAN and uses the struct hack intentionally.
+
+#### Why it is non-fatal
+
+UBSAN in the Linux kernel calls `ubsan_epilogue()` which **prints and returns** — it does
+**not** kill the process or abort execution. `nvgpu_finalize_poweron()` continues past the
+UBSAN reports and completes successfully, as confirmed by the line immediately following:
+
+```
+nvgpu: 17000000.gpu  gk20a_scale_init:541  [INFO]  enabled scaling for GPU
+```
+
+GPU inference works normally (29/29 layers on CUDA, ~7-8 tok/s).
+
+#### Upstream fix (not yet applied)
+
+The correct fix is to convert to a C99 flexible array member in `netlist_priv.h`:
+
+```c
+// Before (C89 struct hack — triggers UBSAN):
+struct netlist_region regions[1];
+
+// After (C99 flexible array — UBSAN-clean):
+struct netlist_region regions[];
+```
+
+This requires updating all `sizeof(struct netlist_image)` usages (FAMs are excluded from
+`sizeof`). The fix should be submitted to
+[OE4T/linux-nvgpu](https://github.com/OE4T/linux-nvgpu) and/or the upstream NVIDIA nvgpu
+tree. **No GitHub issue exists upstream as of 2026-04-01** — contributions welcome.
+
 ---
 
 ## 13. Running Ollama with GPU Acceleration
@@ -1554,7 +1629,7 @@ These appear on every boot and are harmless:
 | Message | Source | Impact |
 |---|---|---|
 | `UBSAN: array-index-out-of-bounds in hal/netlist/netlist.c:617` | nvgpu 5.x GA10B init | None — GPU init completes normally |
-| `devfreq_add_device: Unable to find governor for nvgpu` | Missing `CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND` | GPU runs at fixed max clock (918 MHz), no dynamic scaling |
+| ~~`devfreq_add_device: Unable to find governor for nvgpu`~~ | ~~`governor_pod_scaling.ko` not built (missing ccflags in devfreq Makefile)~~ | **FIXED (Boot 15)** — `nvhost_podgov` loads; 306–918 MHz dynamic scaling active |
 | `Error: Can't initialize nvrm channel` | nvgpu channel init sequence | None — channels work after this |
 
 ---
@@ -1682,14 +1757,14 @@ kubectl --kubeconfig $KC get pods -n ollama -w
 
 ```bash
 # Pull a model (qwen2.5:1.5b is small and fast for CPU inference)
-curl http://10.0.10.38:31434/api/pull -d '{"name":"qwen2.5:1.5b"}'
+curl http://192.168.1.50:31434/api/pull -d '{"name":"qwen2.5:1.5b"}'
 
 # Test inference
-curl http://10.0.10.38:31434/api/generate \
+curl http://192.168.1.50:31434/api/generate \
   -d '{"model":"qwen2.5:1.5b","prompt":"What is 2+2?","stream":false}' | jq .response
 
 # List available models
-curl http://10.0.10.38:31434/api/tags | jq '.models[].name'
+curl http://192.168.1.50:31434/api/tags | jq '.models[].name'
 ```
 
 **Confirmed CPU performance** (Jetson Orin NX, 12× ARM Cortex-A78AE, 16 GB LPDDR5):
@@ -1846,7 +1921,7 @@ operation but prevents any compute channel from being opened.
 | Kernel module | `/dev/nvgpu/igpu0/ctrl` device | ✅ | present, openable |
 | Kernel module | `/dev/nvhost-ctrl` symlink | ✅ | created by Ollama initContainer |
 | Kernel module | GPU power-on / netlist init | ✅ | fully succeeds with correct firmware |
-| Kernel module | devfreq governor | ✅ | `simple_ondemand` (patched in nvgpu 5.1.0) |
+| Kernel module | devfreq governor | ✅ | `nvhost_podgov` — governor_pod_scaling.ko (ccflags fix, Boot 15); 306–918 MHz dynamic scaling |
 | Firmware | `gpmu_ucode_next_prod_image.bin` | ✅ | loaded from `/var/fw-fresh/ga10b/` (NVMe) |
 | Firmware | `pmu_pkc_prod_sig.bin` | ✅ | in `nvidia-firmware-ext:v5`, auto-copied to `/var/fw-fresh/ga10b/` |
 | Firmware | ACR / FECS / GPCCS blobs | ✅ | present in `/var/fw-fresh/ga10b/` |
@@ -1922,8 +1997,9 @@ The GPU is fully operational as of nvgpu 5.1.0:
 - **Flash Attention**: enabled (`OLLAMA_FLASH_ATTENTION=1`)
 - **Non-fatal warning**: `Error: Can't initialize nvrm channel` (logged at startup; does not
   affect inference — GPU channels ARE created, visible in `/sys/kernel/debug/17000000.gpu/status`)
-- **devfreq**: Fixed in nvgpu 5.1.0 — governor patched from `nvgpu_scaling` (L4T-specific,
-  unavailable in Talos) to `simple_ondemand` (compiled into kernel as `CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y`)
+- **devfreq**: Fixed as of Boot 15 — `governor_pod_scaling.ko` now builds correctly after
+  adding missing `ccflags-y` include paths (`nvconftest`, `nvidia-oot/include`) to the devfreq
+  Makefile in `pkg.yaml`. Governor `nvhost_podgov` loads; dynamic scaling 306–918 MHz active.
 - **pmu_pkc_prod_sig.bin**: Now included in `nvidia-firmware-ext:v5` — no longer requires manual
   Job after cluster rebuilds; copied automatically by Ollama initContainer
 
@@ -1938,7 +2014,7 @@ the cluster being reinstalled without saving new credentials to `jetson-test/`.
 
 ```bash
 talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
-  --endpoints 10.0.10.38 --nodes 10.0.10.38 version
+  --endpoints 192.168.1.50 --nodes 192.168.1.50 version
 ```
 
 | Error | Meaning |
@@ -1953,7 +2029,7 @@ If `talosctl version` succeeds (matching certs), perform a **full authenticated 
 
 ```bash
 talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
-  --endpoints 10.0.10.38 --nodes 10.0.10.38 \
+  --endpoints 192.168.1.50 --nodes 192.168.1.50 \
   reset --wipe-mode all --reboot --graceful=false
 ```
 
@@ -1997,7 +2073,7 @@ Press **Enter** to boot. Talos will:
 After the automatic reboot (~30 s), the node returns in maintenance mode:
 
 ```bash
-talosctl --endpoints 10.0.10.38 --nodes 10.0.10.38 --insecure version
+talosctl --endpoints 192.168.1.50 --nodes 192.168.1.50 --insecure version
 # Expected: Unimplemented desc = API is not implemented in maintenance mode
 ```
 
@@ -2008,22 +2084,22 @@ talosctl --endpoints 10.0.10.38 --nodes 10.0.10.38 --insecure version
 ```bash
 talosctl apply-config \
   --insecure \
-  --endpoints 10.0.10.38 \
-  --nodes 10.0.10.38 \
+  --endpoints 192.168.1.50 \
+  --nodes 192.168.1.50 \
   --file manifests/talos/controlplane.yaml.example
 ```
 
 Expected output: only deprecation warnings, no errors. Talos immediately pulls the
-installer from `10.0.10.24:5001` and begins installation (~3-5 min).
+installer from `192.168.1.100:5001` and begins installation (~3-5 min).
 
-> **Registry note**: The local registry at `10.0.10.24:5001` is plain HTTP. The
+> **Registry note**: The local registry at `192.168.1.100:5001` is plain HTTP. The
 > machine config must use the `mirrors` section with an explicit `http://` endpoint:
 > ```yaml
 > registries:
 >   mirrors:
->     10.0.10.24:5001:
+>     192.168.1.100:5001:
 >       endpoints:
->         - "http://10.0.10.24:5001"
+>         - "http://192.168.1.100:5001"
 > ```
 > Do NOT use `config.tls.insecureSkipVerify: true` alone — that instructs the client
 > to use HTTPS and just skip cert verification, which fails against a plain HTTP server
@@ -2036,7 +2112,7 @@ Watch for the node to come back with proper auth (~5 min):
 
 ```bash
 until talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
-  --endpoints 10.0.10.38 --nodes 10.0.10.38 version &>/dev/null; do
+  --endpoints 192.168.1.50 --nodes 192.168.1.50 version &>/dev/null; do
   echo "waiting..."; sleep 15
 done
 echo "Node is up!"
@@ -2046,7 +2122,7 @@ echo "Node is up!"
 
 ```bash
 talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
-  --endpoints 10.0.10.38 --nodes 10.0.10.38 \
+  --endpoints 192.168.1.50 --nodes 192.168.1.50 \
   bootstrap
 ```
 
@@ -2065,7 +2141,7 @@ already running with existing data.
 
 ```bash
 talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
-  --endpoints 10.0.10.38 --nodes 10.0.10.38 \
+  --endpoints 192.168.1.50 --nodes 192.168.1.50 \
   kubeconfig --force ~/PycharmProjects/jetson-test/kubeconfig
 
 # Always keep talos-jetson/ in sync
@@ -2078,7 +2154,7 @@ cp ~/PycharmProjects/jetson-test/talosconfig ~/talos-jetson/talosconfig
 ```bash
 KUBECONFIG=~/PycharmProjects/jetson-test/kubeconfig kubectl get nodes -o wide
 talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
-  --endpoints 10.0.10.38 --nodes 10.0.10.38 version
+  --endpoints 192.168.1.50 --nodes 192.168.1.50 version
 ```
 
 ---
@@ -2101,8 +2177,8 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 | ~~`apply-config` / `upgrade` breaks NVMe boot (signing key mismatch)~~ | ~~`apply-config --mode no-reboot` and `talosctl upgrade` would silently embed a new random kernel signing key, causing all OOT modules (`nvme.ko`, `nvgpu.ko`, etc.) to be rejected at boot with `module.sig_enforce=1`. Root cause: `certs/Makefile` FORCE rule auto-regenerates `certs/signing_key.pem` on every fresh kernel build.~~ | **RESOLVED** — `CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"` (custom filename). `make` has no auto-gen rule for this name so our committed key (`74FD747A`) is always embedded. Verified in Boot 12: zero rejections, NVMe up at 13.7s. See Section 11.2. |
 | UEFI boot order required manual fix | By default, USB DataTraveler (Boot0008) was ahead of NVMe (Boot0009 "Talos Linux UKI") in UEFI boot order → always booted USB even when NVMe was fully configured. **Fixed** via `efibootmgr --bootorder 0009,0001,0008,…` (see Section 7.5). | Persists across reboots once set |
 | Single control-plane node | No HA, no etcd redundancy | By design; scale by adding worker nodes via `worker.yaml` |
-| Registry must be plain HTTP mirror | `10.0.10.24:5001` is HTTP-only; using `insecureSkipVerify: true` alone fails with "server gave HTTP response to HTTPS client". Use `mirrors` with `http://` endpoint instead | See Section 13 registry note |
-| Registry must be reachable at install time | `10.0.10.24:5001` must be up during `apply-config` | Ensure the Mac stays on the Jetson network during provisioning |
+| Registry must be plain HTTP mirror | `192.168.1.100:5001` is HTTP-only; using `insecureSkipVerify: true` alone fails with "server gave HTTP response to HTTPS client". Use `mirrors` with `http://` endpoint instead | See Section 13 registry note |
+| Registry must be reachable at install time | `192.168.1.100:5001` must be up during `apply-config` | Ensure the Mac stays on the Jetson network during provisioning |
 | STATE-only wipe leaves stale Kubernetes PKI | Wiping STATE but preserving EPHEMERAL reuses old kubelet certs which don't match the new cluster CA | Always wipe all partitions for a clean reinstall (`--wipe-mode all` or `talos.experimental.wipe=system`) |
 | `talos.reset=true` is not a valid Talos v1.12 kernel arg | Adding it to the boot cmdline is silently ignored | Use `talos.experimental.wipe=system:STATE` (STATE only) or `talos.experimental.wipe=system` (full disk) |
 | `grubUseUKICmdline: true` must NOT be set on arm64/UKI | This flag is for legacy x86 GRUB only. On Jetson (arm64), setting it causes the installer to skip creating the UKI boot entry → systemd-boot shows only "Reboot Into Firmware Interface" and loops | Remove the flag; `firmware_class.path` is already embedded in the UKI inside the custom-installer image |
@@ -2113,15 +2189,16 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 
 ## 17. Reference: All Image Tags
 
-Current images in the local registry (`10.0.10.24:5001`):
+Current images in the local registry (`192.168.1.100:5001`):
 
 | Image | Tag | Status | Notes |
 |---|---|---|---|
 | `custom-installer` | `v1.12.6-6.18.18` | **Active** | Installer with Clang vmlinuz |
-| `nvidia-tegra-nvgpu` | `5.0.0-6.18.18-talos` | **Active** | `CONFIG_TEGRA_GK20A_NVHOST=n` — CUDA working |
+| `nvidia-tegra-nvgpu` | `5.1.0-6.18.18-talos` | **Active** | `governor_pod_scaling.ko` included — devfreq governor `nvhost_podgov`, 306–918 MHz |
+| `nvidia-tegra-nvgpu` | `5.0.0-6.18.18-talos` | Superseded | `CONFIG_TEGRA_GK20A_NVHOST=n` — CUDA working, fixed 918 MHz |
 | `nvidia-tegra-nvgpu` | `4.0.0-6.18.18-talos` | Superseded | All Clang warnings + API fixes; CUDA blocked |
 | `kernel-modules-clang` | `1.1.0-6.18.18-talos` | **Active** | Clang-compiled module tree |
-| `nvidia-firmware-ext` | `v4` | **Active** | Firmware at correct direct path |
+| `nvidia-firmware-ext` | `v5` | **Active** | Firmware at correct direct path + `pmu_pkc_prod_sig.bin` |
 | `cuda-device-check` | `v1` | Tool | Verifies `cuInit`, lists GPU devices |
 | `jetson-cuda-test` | `v1`–`v5-strace` | Archived | CUDA debugging iterations |
 
@@ -2143,7 +2220,7 @@ Current images in the local registry (`10.0.10.24:5001`):
 | `3.0.0-6.18.18-talos` | Kernel 6.18 API patches (`vm_flags`, `class_create`) | ❌ Unknown |
 | `4.0.0-6.18.18-talos` | All Clang warnings fixed; kernel module loads | ❌ Broken — OOT host1x missing `/dev/nvhost-ctrl`; UBSAN in netlist.c |
 | `5.0.0-6.18.18-talos` | `CONFIG_TEGRA_GK20A_NVHOST=n`; no nvhost dependency | ✅ **WORKING** — confirmed CUDA inference |
-| `5.1.0-6.18.18-talos` | devfreq governor patched: `nvgpu_scaling` → `simple_ondemand` | ✅ **WORKING** — no devfreq error in dmesg |
+| `5.1.0-6.18.18-talos` | devfreq Makefile ccflags fix → `governor_pod_scaling.ko` builds; governor=`nvhost_podgov` | ✅ **WORKING (Boot 15)** — dynamic freq scaling 306–918 MHz active |
 
 **`nvidia-firmware-ext` version history**:
 
