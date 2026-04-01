@@ -14,79 +14,80 @@ on:
         description: 'nvgpu extension version override (blank = use common.sh default)'
         required: false
         default: ''
+      force_rebuild_extensions:
+        description: 'Force rebuild extensions even if cached (true/false)'
+        required: false
+        default: 'false'
 
 concurrency:
   group: build-usb-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build USB image
-    # Native ARM64 runner — no QEMU overhead, 60 GB disk, 16 GB RAM
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 1 — Build + push extension images to ghcr.io  (slow, cached by SHA)
+  #
+  # Requires an ARM64 runner (ubuntu-24.04-arm).
+  # ARM64 runners are available for public repos with GitHub Team/Enterprise.
+  # If you get startup_failure, build extensions locally and push to ghcr.io:
+  #   REGISTRY=ghcr.io/<owner> REGISTRY_DOCKER=ghcr.io/<owner> make build-extensions
+  # Then re-run this workflow — Job 1 will be auto-skipped (images already cached).
+  # ──────────────────────────────────────────────────────────────────────────
+  build-extensions:
+    name: Build extensions (ARM64)
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      skipped: ${{ steps.check_cache.outputs.exists }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if extension images already exist in ghcr.io
+        id: check_cache
+        run: |
+          source scripts/common.sh
+          NVGPU="${NVGPU_VERSION:-5.1.0}"
+          KERNEL="${KERNEL_VERSION:-6.18.18}"
+          IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU}-${KERNEL}-talos"
+          FORCE="${{ inputs.force_rebuild_extensions }}"
+          if [[ "${FORCE}" != "true" ]] && \
+             docker manifest inspect "${IMAGE}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "✓ Extension ${IMAGE} already in ghcr.io — skipping build"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Extension not cached — will build"
+          fi
+
       - name: Set up Docker Buildx
+        if: steps.check_cache.outputs.exists != 'true'
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker-container
-          # Will be updated with the actual registry IP after it starts
 
-      - name: Start local OCI registry
-        run: |
-          # Use port 5001 on all interfaces
-          docker run -d --name registry --restart=always \
-            -p 5001:5000 \
-            registry:2
-
-          # Wait up to 30 s for registry to be ready
-          for i in $(seq 1 15); do
-            curl -sf http://localhost:5001/v2/_catalog && break
-            echo "Waiting for registry… ($i/15)"
-            sleep 2
-          done
-
-          # On Linux, Docker containers cannot reach the host via 'localhost' or
-          # 'host.docker.internal' (unlike macOS). Use the host's primary LAN IP
-          # so both build scripts (host) and BuildKit containers reach the same registry.
-          HOST_IP=$(hostname -I | awk '{print $1}')
-          echo "HOST_IP=${HOST_IP}" >> "$GITHUB_ENV"
-          echo "REGISTRY=${HOST_IP}:5001"       >> "$GITHUB_ENV"
-          echo "REGISTRY_DOCKER=${HOST_IP}:5001" >> "$GITHUB_ENV"
-          echo "Registry reachable at ${HOST_IP}:5001"
-
-      - name: Recreate Buildx builder with insecure registry config
-        run: |
-          # Now that we know HOST_IP, recreate the builder with the right config
-          docker buildx rm talos-builder 2>/dev/null || true
-          docker buildx create \
-            --name talos-builder \
-            --driver docker-container \
-            --driver-opt network=host \
-            --config <(cat <<EOF
-          [registry."${HOST_IP}:5001"]
-            http = true
-            insecure = true
-          EOF
-          ) \
-            --use
-          docker buildx inspect --bootstrap talos-builder
-
-      - name: Restore signing keys from GitHub Secrets
+      - name: Restore signing keys
+        if: steps.check_cache.outputs.exists != 'true'
         run: |
           mkdir -p keys
           printf '%s' "${{ secrets.SIGNING_KEY_PEM }}"  > keys/signing_key.pem
           printf '%s' "${{ secrets.SIGNING_KEY_X509 }}" > keys/signing_key.x509
           chmod 600 keys/signing_key.pem
-          # Quick sanity check
           openssl x509 -in keys/signing_key.x509 -noout -serial
 
-      - name: Free up disk space
+      - name: Free disk space for kernel build
+        if: steps.check_cache.outputs.exists != 'true'
         run: |
-          # Remove large pre-installed packages to free space for kernel build
           sudo apt-get remove -y --purge \
             '^dotnet-.*' '^llvm-.*' '^php.*' '^mongodb-.*' \
             azure-cli google-cloud-sdk google-chrome-stable firefox \
@@ -95,32 +96,75 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h /
 
-      - name: Restore BuildKit cache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/buildkit-cache
-          key: buildkit-nvgpu-${{ hashFiles('profiles/**', 'scripts/09-build-nvgpu.sh', 'scripts/common.sh') }}-${{ github.sha }}
-          restore-keys: |
-            buildkit-nvgpu-${{ hashFiles('profiles/**', 'scripts/09-build-nvgpu.sh', 'scripts/common.sh') }}-
-            buildkit-nvgpu-
-
-      - name: Build extensions (kernel + nvgpu + firmware)
-        run: make build-extensions
+      - name: Build + push extensions to ghcr.io
+        if: steps.check_cache.outputs.exists != 'true'
+        run: |
+          make build-extensions
         timeout-minutes: 120
         env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
           TALOS_VERSION: ${{ inputs.talos_version || '' }}
           NVGPU_VERSION: ${{ inputs.nvgpu_version || '' }}
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 2 — Assemble UKI + USB image from ghcr.io extension images
+  #
+  # Fast (~10 min). Runs on standard x86_64 runner.
+  # Pulls ARM64 extension images from ghcr.io, builds UKI via Talos imager,
+  # wraps it as a bootable raw disk image.
+  # Runs even when Job 1 was skipped (images already cached).
+  # ──────────────────────────────────────────────────────────────────────────
+  build-usb:
+    name: Assemble UKI + USB image
+    runs-on: ubuntu-latest
+    needs: build-extensions
+    if: always() && (needs.build-extensions.result == 'success' || needs.build-extensions.result == 'skipped')
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU (arm64 for Talos imager)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore signing keys
+        run: |
+          mkdir -p keys
+          printf '%s' "${{ secrets.SIGNING_KEY_PEM }}"  > keys/signing_key.pem
+          printf '%s' "${{ secrets.SIGNING_KEY_X509 }}" > keys/signing_key.x509
+          chmod 600 keys/signing_key.pem
 
       - name: Build UKI + USB image
         run: make usb
         timeout-minutes: 30
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
+          TALOS_VERSION: ${{ inputs.talos_version || '' }}
+          NVGPU_VERSION: ${{ inputs.nvgpu_version || '' }}
 
       - name: Locate produced image
         id: img
         run: |
           RAW=$(ls dist/*.raw dist/*.raw.zst 2>/dev/null | head -1)
           echo "path=${RAW}" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename ${RAW})" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "${RAW}")" >> "$GITHUB_OUTPUT"
           ls -lh dist/
 
       - name: Upload USB image as workflow artifact
@@ -153,11 +197,11 @@ jobs:
 
             ### Included extensions
 
-            | Extension | Tag |
+            | Extension | Registry |
             |---|---|
-            | `nvidia-tegra-nvgpu` | `${{ env.NVGPU_VERSION || '5.1.0' }}-6.18.18-talos` |
-            | `nvidia-firmware-ext` | `v5` |
-            | `kernel-modules-clang` | `1.1.0-6.18.18-talos` |
+            | `nvidia-tegra-nvgpu` | `ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu` |
+            | `nvidia-firmware-ext` | `ghcr.io/${{ github.repository_owner }}/nvidia-firmware-ext:v5` |
+            | `kernel-modules-clang` | `ghcr.io/${{ github.repository_owner }}/kernel-modules-clang` |
 
             See [README](https://github.com/${{ github.repository }}#readme) for full setup instructions.
           files: ${{ steps.img.outputs.path }}
