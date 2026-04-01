@@ -138,16 +138,16 @@ Or run manually: **Actions → Build USB Image → Run workflow**
 | `SIGNING_KEY_PEM` | Content of `keys/signing_key.pem` |
 | `SIGNING_KEY_X509` | Content of `keys/signing_key.x509` |
 
-**Two-job design**:
-- **Job 1** (`build-extensions`): builds kernel + GPU driver extensions, pushes to `ghcr.io`.
-  Requires an ARM64 runner (`ubuntu-24.04-arm`). Skipped automatically when extension
-  images are already cached in ghcr.io (version unchanged). If your plan doesn't include
-  ARM64 runners, pre-build locally and push to ghcr.io once:
+**Two separate workflows**:
+- **`build-extensions.yaml`**: builds kernel + GPU driver extensions (~90 min first run),
+  pushes to `ghcr.io`. Runs on `ubuntu-latest` with QEMU arm64 cross-compilation —
+  no special runners needed. Auto-skips if extension images are already cached.
+  Can also be pre-populated locally:
   ```bash
   REGISTRY=ghcr.io/<you> REGISTRY_DOCKER=ghcr.io/<you> make build-extensions
   ```
-- **Job 2** (`build-usb`): assembles UKI + USB image from ghcr.io images (~10 min).
-  Runs on a standard x86_64 runner. Works independently of Job 1 if extensions are cached.
+- **`build-usb.yaml`**: assembles UKI + USB image from cached ghcr.io images (~10 min).
+  Runs on `ubuntu-latest`. Trigger this after extensions are cached — or on tag push.
 
 **Daily Talos check**: `.github/workflows/check-talos.yaml` runs every morning
 and opens a GitHub issue automatically when a new Talos release is available,
