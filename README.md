@@ -772,62 +772,106 @@ talos-<hash>      Ready    control-plane   2m    v1.35.1
 > operation that produces new credentials. This prevents the cert-mismatch situation
 > described in Section 13.
 
-### 7.5 Fix NVMe Boot (Copy USB UKI to NVMe EFI Partition)
+### 7.5 Fix NVMe Boot (Copy USB UKI to NVMe EFI Partition + Boot Order)
 
-**Problem**: After `apply-config` or `talosctl upgrade`, Talos writes an 18.8 MB UKI
-(without system extensions) to the NVMe EFI partition. On boot, the Jetson kernel
-fails to initialize hardware because the required kernel modules are missing → UEFI
-falls through to the next boot option (USB).
+**Problem**: After `apply-config` or `talosctl upgrade`, Talos **silently replaces the
+NVMe EFI UKI** with a new build that has a **different kernel module signing key** than
+the installed system extensions. Because `module.sig_enforce=1` is in the kernel cmdline,
+the mismatched modules are rejected → the NVMe PCIe/NVMe controller driver fails to
+load → the NVMe disk becomes invisible → STATE/META partitions show as "missing" →
+Talos enters maintenance mode.
 
-**Root cause**: `custom-installer:v1.12.6-6.18.18` doesn't have extensions baked in.
-The deprecated `install.extensions` writes extensions as runtime overlays but NOT into
-the UKI EFI binary. The NVMe UKI at `/EFI/Linux/` is therefore extension-free.
+Additionally, the Jetson UEFI boot order had the USB DataTraveler ahead of NVMe, so
+even a correctly configured NVMe would only boot when USB was removed.
 
-**Fix**: Copy the working 149 MB USB UKI (`talos-v8.efi`) directly to the NVMe EFI
-partition. This must be done after every full reinstall or upgrade.
+**Root cause (signing key mismatch)**: `apply-config --mode no-reboot` triggers a
+silent boot-asset update on the system disk (nvme0n1). The new UKI is built from the
+currently running Talos image but has a **fresh random signing key** that does not match
+the `kernel-modules-clang` and `nvidia-tegra-nvgpu` extensions already installed. Three
+different UKI checksums were found during investigation:
 
-```bash
-# Step 1: create privileged pod (namespace must be privileged)
-kubectl label namespace default pod-security.kubernetes.io/enforce=privileged \
-  pod-security.kubernetes.io/enforce-version=latest --overwrite
+| Location | MD5 | Source |
+|---|---|---|
+| `nvme0n1p1/EFI/Linux/talos-nvgpu5.0.0.efi` | `e4ebfbd6…` | Written by `apply-config` — broken |
+| `nvme0n1p1/EFI/BOOT/BOOTAA64.efi` | `4c1fed07…` | Original NVMe install — broken |
+| `sda1/EFI/BOOT/BOOTAA64.EFI` (USB) | `3aae64a2…` | Working USB UKI — correct |
 
-kubectl run efi-fix --image=busybox:latest --restart=Never \
-  --overrides='{"spec":{"nodeSelector":{"kubernetes.io/hostname":"talos-smq-3hh"},"tolerations":[{"operator":"Exists"}],"containers":[{"name":"efi-fix","image":"busybox:latest","command":["sh","-c","sleep 180"],"securityContext":{"privileged":true},"volumeMounts":[{"name":"dev","mountPath":"/dev"}]}],"volumes":[{"name":"dev","hostPath":{"path":"/dev"}}]}}' \
-  -n default
-
-# Step 2: wait for pod to start
-kubectl wait --for=condition=ready pod/efi-fix -n default --timeout=30s
-
-# Step 3: mount both partitions and copy UKI
-kubectl exec -n default efi-fix -- sh -c "
-  mkdir -p /mnt/efi /mnt/usb
-  mount -t vfat /dev/nvme0n1p1 /mnt/efi   # NVMe EFI (label: EFI)
-  mount -t vfat /dev/sda1      /mnt/usb   # USB EFI  (label: TALOS_EFI)
-
-  # Copy 149 MB UKI (with all extensions) from USB to NVMe
-  cp /mnt/usb/EFI/Linux/talos-v8.efi /mnt/efi/EFI/Linux/talos-v8.efi
-
-  # Set as default boot entry
-  cat > /mnt/efi/loader/loader.conf << 'EOF'
-default talos-v8.efi
-timeout 5
-console-mode auto
-EOF
-  sync
-  echo 'Done. NVMe will now boot from talos-v8.efi (149 MB, with extensions).'
-"
-
-kubectl delete pod efi-fix -n default
+**Diagnostic signature** (from UART log during failed NVMe boot):
+```
+[13.531] Loading of module with unavailable key is rejected   # x6
+[13.846] volume META: waiting -> missing
+[13.847] volume STATE: waiting -> missing
+[15.141] entering maintenance service
 ```
 
-> **After this fix**: the Jetson can cold-boot directly from NVMe without USB.
-> The USB drive may be removed. The USB is still needed if NVMe STATE needs to be wiped.
+**Fix**: Replace ALL NVMe EFI UKIs with the verified working USB UKI, then set NVMe as
+first UEFI boot device. Must be repeated after any `apply-config` or `talosctl upgrade`.
 
-> **Why `talos-v8.efi`?** It is the v8 UKI built via the imager with all three extensions
-> (kernel-modules-clang, nvidia-tegra-nvgpu:4.0.0, nvidia-firmware-ext:v4) baked in.
-> Long-term fix: use `output.kind: installer` in the imager profile to create an
-> installer image with extensions baked in; then `talosctl upgrade` will write the
-> correct UKI automatically.
+```bash
+# Step 1: create privileged pod
+cat <<'EOF' | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fix-nvme-uki
+  namespace: default
+spec:
+  restartPolicy: Never
+  tolerations:
+  - operator: Exists
+  nodeName: talos-smq-3hh
+  containers:
+  - name: worker
+    image: alpine:3.19
+    securityContext:
+      privileged: true
+    command:
+    - sh
+    - -c
+    - |
+      apk add -q efibootmgr
+      mkdir -p /mnt/nvme-efi /mnt/usb-efi
+      mount /dev/nvme0n1p1 /mnt/nvme-efi
+      mount /dev/sda1 /mnt/usb-efi
+
+      # Replace both NVMe UKI locations with the working USB UKI
+      cp /mnt/usb-efi/EFI/BOOT/BOOTAA64.EFI /mnt/nvme-efi/EFI/Linux/talos-nvgpu5.0.0.efi
+      cp /mnt/usb-efi/EFI/BOOT/BOOTAA64.EFI /mnt/nvme-efi/EFI/BOOT/BOOTAA64.efi
+      sync
+
+      echo "Checksums (must all match):"
+      md5sum /mnt/nvme-efi/EFI/Linux/talos-nvgpu5.0.0.efi
+      md5sum /mnt/nvme-efi/EFI/BOOT/BOOTAA64.efi
+      md5sum /mnt/usb-efi/EFI/BOOT/BOOTAA64.EFI
+
+      umount /mnt/nvme-efi /mnt/usb-efi
+
+      # Fix EFI boot order: Boot0009 = "Talos Linux UKI" (NVMe) must be first
+      # Boot0009 points directly to nvme0n1p1 by GPT UUID — the proper Talos entry
+      mkdir -p /sys/firmware/efi/efivars
+      mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+      efibootmgr --bootorder 0009,0001,0008,0004,0003,0002,0005,0007,0006
+      echo "New boot order:"
+      efibootmgr | grep BootOrder
+      echo "DONE"
+EOF
+
+kubectl wait --for=condition=ready pod/fix-nvme-uki -n default --timeout=60s
+kubectl logs -f fix-nvme-uki -n default
+kubectl delete pod fix-nvme-uki -n default
+```
+
+> **After this fix**: reboot with USB still plugged in — the Jetson will boot NVMe via
+> `Boot0009` ("Talos Linux UKI") which loads `EFI/BOOT/BOOTAA64.efi` on nvme0n1p1
+> (= the correct full UKI with all extensions). USB serves as fallback only.
+
+> **IMPORTANT — do NOT run `apply-config` or `talosctl upgrade` after this fix**
+> without immediately re-running the UKI copy step. Both commands silently overwrite
+> the NVMe UKI with a mismatched-signing-key version and break NVMe boot again.
+
+> **Long-term fix**: modify the `custom-installer` image to generate a reproducible
+> signing key (embedded in the image), so all UKIs built from it share the same key
+> regardless of when they are built. Then `apply-config` can no longer break NVMe boot.
 
 ---
 
@@ -1698,8 +1742,8 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 | `devfreq` governor missing | Talos 6.18.18 kernel does not include `simple_ondemand` devfreq governor (`CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND` not compiled). nvgpu logs "Unable to find governor". | Harmless: GPU still runs at 918 MHz (maximum). Fix: rebuild kernel with `CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND=y` |
 | `Can't initialize nvrm channel` at startup | Logged by Ollama's CUDA backend; libnvrm_gpu channel init has a non-fatal issue | Non-fatal: GPU channels ARE created (visible in nvgpu debugfs), inference works normally |
 | dustynv Ollama entrypoint exits | Default entrypoint starts `ollama serve` in background then exits → pod status "Completed" → restart loop | Override with `command: ["ollama", "serve"]` to keep process in foreground |
-| NVMe UKI missing extensions after fresh install | `talosctl upgrade` / `apply-config` writes an 18.8MB UKI (no extensions) to NVMe using `custom-installer:v1.12.6-6.18.18`. Without extensions, the NVMe UKI fails to boot (no kernel modules for Jetson hardware). UEFI falls through to USB. **Fix**: copy the working 149MB USB UKI (`talos-v8.efi`) to `/EFI/Linux/` on NVMe partition (`nvme0n1p1`) and set `default talos-v8.efi` in `loader.conf`. Must be repeated after every full reinstall/upgrade. Long-term fix: build imager installer output with extensions baked in. | Use privileged pod to mount `nvme0n1p1` and copy `talos-v8.efi` from `sda1` (USB) to `/mnt/efi/EFI/Linux/`. See Section 7.5 |
-| UEFI boot order | Cannot set USB-first from software | Set manually in UEFI firmware |
+| `apply-config` / `upgrade` breaks NVMe boot (signing key mismatch) | `apply-config --mode no-reboot` and `talosctl upgrade` silently replace the NVMe EFI UKI with a new build that has a **different random kernel signing key**. With `module.sig_enforce=1`, the `kernel-modules-clang` and `nvidia-tegra-nvgpu` extension modules are rejected → NVMe PCIe driver fails → STATE/META "missing" → maintenance mode. Symptom: `Loading of module with unavailable key is rejected` (x6) in UART log, then STATE/META both "waiting → missing". **Fix**: after every `apply-config`/upgrade, re-run the UKI copy pod from Section 7.5 to overwrite all NVMe UKIs with the USB UKI. Long-term fix: use reproducible signing key in custom-installer. | See Section 7.5 |
+| UEFI boot order required manual fix | By default, USB DataTraveler (Boot0008) was ahead of NVMe (Boot0009 "Talos Linux UKI") in UEFI boot order → always booted USB even when NVMe was fully configured. **Fixed** via `efibootmgr --bootorder 0009,0001,0008,…` (see Section 7.5). | Persists across reboots once set |
 | Single control-plane node | No HA, no etcd redundancy | By design; scale by adding worker nodes via `worker.yaml` |
 | Registry must be plain HTTP mirror | `10.0.10.24:5001` is HTTP-only; using `insecureSkipVerify: true` alone fails with "server gave HTTP response to HTTPS client". Use `mirrors` with `http://` endpoint instead | See Section 13 registry note |
 | Registry must be reachable at install time | `10.0.10.24:5001` must be up during `apply-config` | Ensure the Mac stays on the Jetson network during provisioning |
