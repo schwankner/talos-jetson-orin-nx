@@ -1,14 +1,15 @@
-# ── Credentials (never commit) ───────────────────────────────────────────────
+# ── Credentials & secrets (never commit) ────────────────────────────────────
 talosconfig
 kubeconfig
 *.key
 *.crt
-# NOTE: keys/signing_key.pem is intentionally NOT gitignored.
-# It is a build-time reproducibility key embedded in the kernel via
-# CONFIG_MODULE_SIG_KEY. It is not a secret in the traditional sense — exposing
-# the private key only means someone could build modules that load in THIS kernel.
-# Committing it ensures every build uses the same key and prevents "module key
-# unavailable" boot failures. See scripts/00-setup-keys.sh and README Section 12.2.
+
+# Kernel module signing keys — generate with: ./scripts/00-setup-keys.sh
+# or: make keys
+keys/
+
+# UART / serial boot logs — kept locally for debugging only
+logs/
 
 # ── Build outputs (large binaries, reproduced by scripts) ────────────────────
 dist/
