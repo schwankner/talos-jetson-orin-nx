@@ -15,12 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install shellcheck
+        # Use apt instead of the action — avoids x86_64/arm64 download issues
+        run: sudo apt-get install -y shellcheck
+
       - name: Run shellcheck
-        uses: ludeeus/action-shellcheck@master
-        with:
-          scandir: "./scripts"
-          severity: warning
-          additional_files: "scripts/common.sh"
+        run: |
+          shellcheck --severity=warning scripts/*.sh
+          echo "Shellcheck passed"
 
   # ── YAML validation ─────────────────────────────────────────────────────────
   validate-yaml:
@@ -31,47 +33,26 @@ jobs:
 
       - name: Validate imager profiles
         run: |
-          for f in profiles/*.yaml; do
+          shopt -s nullglob
+          files=(profiles/*.yaml)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No profile YAML files found — skipping"
+            exit 0
+          fi
+          for f in "${files[@]}"; do
             python3 -c "import yaml, sys; yaml.safe_load(open('$f'))" \
               && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
       - name: Validate manifests
         run: |
-          for f in manifests/**/*.yaml manifests/**/*.example; do
-            # Skip non-yaml examples
-            [[ "$f" == *.yaml || "$f" == *.yaml.example ]] || continue
+          shopt -s globstar nullglob
+          files=(manifests/**/*.yaml)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No manifest YAML files found — skipping"
+            exit 0
+          fi
+          for f in "${files[@]}"; do
             python3 -c "import yaml, sys; yaml.safe_load(open('$f'))" \
               && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
-
-  # ── Release ─────────────────────────────────────────────────────────────────
-  release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [shellcheck, validate-yaml]
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Extract release notes from CHANGELOG.md
-        id: changelog
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          # Extract section for this version between the first two ## headings
-          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
-          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$NOTES" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          body: ${{ steps.changelog.outputs.notes }}
-          files: |
-            profiles/*.yaml

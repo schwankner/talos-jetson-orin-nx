@@ -120,7 +120,7 @@ info "    Key verified: kernel serial ${KERNEL_KEY_SERIAL} matches keys/signing_
 # the nvgpu modules. Skipping this step would cause module rejection on boot.
 info "Step 4: Rebuilding custom-installer with new vmlinuz..."
 INSTALLER_BUILD_DIR=$(mktemp -d)
-trap "rm -rf ${INSTALLER_BUILD_DIR}" EXIT
+trap 'rm -rf "${INSTALLER_BUILD_DIR}"' EXIT
 
 cp "${VMLINUZ_SRC}" "${INSTALLER_BUILD_DIR}/vmlinuz.efi"
 cat > "${INSTALLER_BUILD_DIR}/Dockerfile" << 'IMGEOF'
@@ -140,7 +140,7 @@ info "    custom-installer pushed: ${REGISTRY_DOCKER}/custom-installer:${TALOS_V
 if [[ "${KERNEL_ONLY}" != "1" ]]; then
   info "Step 5: Packaging nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos..."
   EXT_BUILD_DIR=$(mktemp -d)
-  trap "rm -rf ${INSTALLER_BUILD_DIR} ${EXT_BUILD_DIR}" EXIT
+  trap 'rm -rf "${INSTALLER_BUILD_DIR}" "${EXT_BUILD_DIR}"' EXIT
 
   cat > "${EXT_BUILD_DIR}/manifest.yaml" << EOF
 version: v1alpha1
