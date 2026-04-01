@@ -116,6 +116,9 @@ data:
         echo '  - name: "0"'
         echo '    containerEdits:'
         echo '      deviceNodes:'
+        # Only include real device nodes (char/block devices) — not symlinks.
+        # containerd CDI rejects symlinks with "not a device node".
+        # /dev/nvhost-ctrl is handled separately below via hostPath mapping.
         for dev in \
             /dev/nvgpu/igpu0/ctrl \
             /dev/nvgpu/igpu0/channel \
@@ -130,7 +133,6 @@ data:
             /dev/nvgpu/igpu0/prof-dev \
             /dev/nvgpu/igpu0/sched \
             /dev/nvgpu/igpu0/tsg \
-            /dev/nvhost-ctrl \
             /dev/nvhost-ctrl-gpu \
             /dev/nvhost-gpu \
             /dev/nvhost-as-gpu \
@@ -140,10 +142,18 @@ data:
             /dev/nvhost-power-gpu \
             /dev/nvhost-prof-gpu \
             /dev/nvmap; do
-          if [ -e "${dev}" ]; then
+          # Skip symlinks — only inject real device nodes
+          if [ -e "${dev}" ] && [ ! -L "${dev}" ]; then
             printf '        - path: %s\n          permissions: rw\n' "${dev}"
           fi
         done
+        # /dev/nvhost-ctrl: JetPack 6 libcuda.so.1.1 opens this during cuInit.
+        # On nvgpu 5.x (NVHOST=n) it doesn't exist natively — it's a symlink to
+        # /dev/nvgpu/igpu0/ctrl on the host.  We inject the real device node as
+        # /dev/nvhost-ctrl in the container using hostPath to avoid the symlink.
+        if [ -e "/dev/nvgpu/igpu0/ctrl" ]; then
+          printf '        - path: /dev/nvhost-ctrl\n          hostPath: /dev/nvgpu/igpu0/ctrl\n          permissions: rw\n'
+        fi
         echo '      mounts:'
         echo '        # Bind-mount the entire JetPack r36.5 library directory.'
         echo '        # Replaces all individual hostPath lib mounts in the legacy manifest.'
@@ -153,7 +163,10 @@ data:
         echo '      env:'
         echo '        # Prepend r36.5 libs so they shadow any 0-byte stubs in the image.'
         echo '        - "LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local/cuda/lib64:/usr/local/cuda/compat"'
-        echo 'containerEdits: []'
+        # containerEdits at spec root must be an object (ContainerEdits), not an
+        # array.  Omit it entirely — it is optional and defaults to empty.
+        # (Writing 'containerEdits: []' causes containerd to reject the spec with
+        #  "cannot unmarshal array into Go struct field Spec.containerEdits")
       } > "${CDI_SPEC}"
 
       DEV_COUNT=$(grep -c 'path: /dev/' "${CDI_SPEC}" 2>/dev/null || echo 0)
