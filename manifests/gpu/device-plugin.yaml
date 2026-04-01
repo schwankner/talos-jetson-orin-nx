@@ -2,46 +2,23 @@
 # nvidia-device-plugin — exposes nvidia.com/gpu as a Kubernetes extended resource
 #
 # Uses squat/generic-device-plugin (https://github.com/squat/generic-device-plugin)
-# running in CDI mode: on AllocateResponse it returns the CDI device ID
-# "nvidia.com/gpu=0" rather than raw device paths.  containerd 2.x reads the
-# CDI spec written by the nvidia-cdi-setup DaemonSet and injects all devices,
-# mounts and environment variables automatically.
+# which watches /dev/nvgpu/igpu0/ctrl and reports nvidia.com/gpu: 1 to kubelet.
+#
+# Device injection strategy (two-layer):
+#   1. Device plugin injects /dev/nvgpu/igpu0/ctrl (sentinel device, resource tracking)
+#   2. containerd CDI annotation (cdi.k8s.io/ on the pod) injects the full set of
+#      nvgpu + nvhost device nodes, JetPack r36.5 libs and LD_LIBRARY_PATH from
+#      /var/run/cdi/nvidia-jetson.yaml (written by nvidia-cdi-setup DaemonSet)
 #
 # Resource exposed:  nvidia.com/gpu
-# CDI device ID:     nvidia.com/gpu=0   (matches kind/name in the CDI spec)
 #
 # Prerequisites:
-#   - nvidia-cdi-setup DaemonSet must be Running (CDI spec present)
-#   - containerd CDI enabled (see manifests/talos/machine-patch-cdi.yaml)
+#   - nvidia-cdi-setup DaemonSet Running (CDI spec present at /var/run/cdi/)
+#   - containerd 2.x (CDI enabled by default in containerd 2.x)
 #
 # Apply:
 #   kubectl apply -f manifests/gpu/device-plugin.yaml
-#   (applied automatically by scripts/10-setup-cdi.sh)
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nvidia-device-plugin-config
-  namespace: nvidia-system
-data:
-  # Device group config for squat/generic-device-plugin.
-  #
-  # The plugin watches /dev/nvgpu/igpu0/ctrl to determine GPU presence.
-  # When a pod requests nvidia.com/gpu, it returns the CDI device ID
-  # "nvidia.com/gpu=0" in AllocateResponse — containerd resolves the rest
-  # from the CDI spec at /var/run/cdi/nvidia-jetson.yaml.
-  #
-  # count: 1 — single Jetson iGPU; concurrent GPU access is handled at the
-  #            CUDA / nvgpu level, not at this allocation level.
-  config.yaml: |
-    - name: gpu
-      groups:
-        - count: 1
-          paths:
-            - path: /dev/nvgpu/igpu0/ctrl
-          cdi:
-            - kind: nvidia.com/gpu
-              name: "0"
+#   (called automatically by scripts/10-setup-cdi.sh)
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -66,14 +43,20 @@ spec:
       priorityClassName: system-node-critical
       containers:
         - name: generic-device-plugin
-          # squat/generic-device-plugin v0.5.0 — multi-arch (amd64 + arm64)
+          # squat/generic-device-plugin — multi-arch (amd64 + arm64)
           # Source: https://github.com/squat/generic-device-plugin
-          # Pin to a specific digest in production for reproducibility.
-          image: squat/generic-device-plugin:0.5.0
+          # Using --device flag directly (config file approach has a mount quirk).
+          # Digest-pin in production for reproducibility:
+          #   squat/generic-device-plugin@sha256:e85f9637ea93f0e9a8d477b0e136783cd6fb8f1a5426cf84ef05ab4c88661c8c
+          image: squat/generic-device-plugin:latest
           args:
-            # Expose resources under the nvidia.com domain → nvidia.com/gpu
+            # Expose resources under the nvidia.com domain → nvidia.com/gpu: 1
             - --domain=nvidia.com
-            - --config=/etc/config/config.yaml
+            # Sentinel device: GPU presence is determined by /dev/nvgpu/igpu0/ctrl.
+            # mountPath must match path for the AllocateResponse device entry.
+            # Full CDI injection (all devices + libs + env) is handled separately
+            # via the cdi.k8s.io/gpu0 pod annotation in ollama-cdi.yaml.
+            - --device={"name":"gpu","groups":[{"count":1,"paths":[{"path":"/dev/nvgpu/igpu0/ctrl","mountPath":"/dev/nvgpu/igpu0/ctrl"}]}]}
           securityContext:
             privileged: true
           resources:
@@ -88,8 +71,6 @@ spec:
               mountPath: /var/lib/kubelet/device-plugins
             - name: dev
               mountPath: /dev
-            - name: config
-              mountPath: /etc/config
       volumes:
         - name: device-plugin
           hostPath:
@@ -97,6 +78,3 @@ spec:
         - name: dev
           hostPath:
             path: /dev
-        - name: config
-          configMap:
-            name: nvidia-device-plugin-config
