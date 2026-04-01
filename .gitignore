@@ -46,10 +46,18 @@ __MACOSX/
 # ── Claude Code internal state ────────────────────────────────────────────────
 .claude/
 
-# ── Day-2 operational files (kept locally only) ───────────────────────────────
+# ── Day-2 / cluster-ops (kept locally only, not needed for image build) ──────
 manifests/ollama/
+manifests/gpu/cdi-setup.yaml
+manifests/gpu/device-plugin.yaml
+manifests/talos/machine-patch-cdi.yaml
+scripts/03-apply-config.sh
+scripts/04-fix-nvme-boot.sh
+scripts/05-bootstrap-cluster.sh
 scripts/06-deploy-ollama.sh
 scripts/07-install-l4t-libs.sh
+scripts/08-test-nvgpu.sh
+scripts/10-setup-cdi.sh
 
 # ── Intermediate imager output directories ────────────────────────────────────
 imager-out-v*/
