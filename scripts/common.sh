@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # ── Registry ────────────────────────────────────────────────────────────────
-REGISTRY="${REGISTRY:-10.0.10.24:5001}"
+REGISTRY="${REGISTRY:-192.168.1.100:5001}"
 REGISTRY_DOCKER="${REGISTRY_DOCKER:-host.docker.internal:5001}"
 
 # ── Talos version ────────────────────────────────────────────────────────────
