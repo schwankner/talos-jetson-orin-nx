@@ -1,0 +1,28 @@
+# Talos machine config patch — enable CDI in containerd
+#
+# Adds a containerd drop-in config that enables the Container Device Interface (CDI)
+# feature and sets /var/run/cdi as the CDI spec directory.
+#
+# containerd 2.x ships with CDI support built in; this patch ensures it is
+# explicitly enabled and points at the directory written by the nvidia-cdi-setup
+# DaemonSet.  The file is numbered 99- so it loads after all Talos-generated
+# drop-ins and can safely override defaults.
+#
+# Apply (once, requires node reboot to take effect):
+#   talosctl apply-config \
+#     --nodes 10.0.10.38 \
+#     --patch @manifests/talos/machine-patch-cdi.yaml \
+#     --mode staged
+#
+# (applied automatically by scripts/10-setup-cdi.sh)
+machine:
+  files:
+    - path: /etc/cri/conf.d/99-cdi.toml
+      op: create
+      permissions: 0o644
+      content: |
+        # containerd CDI support — enabled for nvidia.com/gpu device injection
+        # Spec dir /var/run/cdi is populated by the nvidia-cdi-setup DaemonSet.
+        [plugins."io.containerd.grpc.v1.cri"]
+          enable_cdi = true
+          cdi_spec_dirs = ["/var/run/cdi"]

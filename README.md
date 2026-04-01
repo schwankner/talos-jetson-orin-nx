@@ -72,6 +72,8 @@ GPU compute support in Kubernetes pods. This repository provides everything need
     - [12.5 Undefined Symbols (L4T-specific)](#125-undefined-symbols-l4t-specific)
     - [12.6 CUDA Error 999 — nvhost syncpoint](#126-cuda-error-999-cudastreamsynchronize--nvhost-syncpoint)
 13. [Running Ollama with GPU Acceleration](#13-running-ollama-with-gpu-acceleration)
+    - [13.1 CDI Stack (Recommended — OOB GPU access)](#131-cdi-stack-recommended--oob-gpu-access)
+    - [13.2 Legacy hostPath Approach](#132-legacy-hostpath-approach)
 14. [Cluster Recovery](#14-cluster-recovery)
 15. [Known Limitations](#15-known-limitations)
 16. [Contributing](#16-contributing)
@@ -128,11 +130,13 @@ sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/rdiskN bs=4m && sync
 # 5. Bootstrap etcd and save credentials (run ONCE per fresh install)
 ./scripts/05-bootstrap-cluster.sh
 
-# 6. Deploy gpu-libs-restore DaemonSet (auto-restores JetPack libs on every boot)
-kubectl apply -f manifests/ollama/gpu-libs-restore.yaml
+# 6. Deploy CDI stack (OOB GPU access — recommended)
+#    Sets up nvidia.com/gpu resource + CDI spec + JetPack libs automatically.
+./scripts/10-setup-cdi.sh
 
-# 7. Deploy Ollama and pull model
-./scripts/06-deploy-ollama.sh
+# Alternative (legacy): manual hostPath approach
+# kubectl apply -f manifests/ollama/gpu-libs-restore.yaml
+# ./scripts/06-deploy-ollama.sh
 ```
 
 ### Day-2 Operations
@@ -320,10 +324,15 @@ talos-jetson-orin-nx/
 │
 ├── manifests/
 │   ├── talos/
-│   │   └── controlplane.yaml.example  ← Talos machine config template
+│   │   ├── controlplane.yaml.example  ← Talos machine config template
+│   │   └── machine-patch-cdi.yaml     ← Talos patch: enable CDI in containerd
+│   ├── gpu/
+│   │   ├── cdi-setup.yaml             ← DaemonSet: libs + firmware + CDI spec writer
+│   │   └── device-plugin.yaml         ← DaemonSet: nvidia.com/gpu device plugin (CDI)
 │   └── ollama/
-│       ├── ollama-deployment.yaml     ← Ollama Deployment + NodePort Service
-│       └── gpu-libs-restore.yaml      ← DaemonSet: auto-restore JetPack r36.5 libs
+│       ├── ollama-cdi.yaml            ← Ollama deployment (CDI, OOB — recommended)
+│       ├── ollama-deployment.yaml     ← Ollama deployment (legacy hostPath)
+│       └── gpu-libs-restore.yaml      ← DaemonSet: JetPack libs restore (legacy)
 │
 ├── scripts/                     ← Reproducible build + deploy scripts
 │   ├── common.sh                ← Shared env vars (REGISTRY, versions, paths)
@@ -336,14 +345,14 @@ talos-jetson-orin-nx/
 │   ├── 06-deploy-ollama.sh      ← Deploy Ollama LLM server with GPU
 │   ├── 07-install-l4t-libs.sh   ← [legacy] Manual JetPack libs download
 │   ├── 08-test-nvgpu.sh         ← Test different nvgpu versions
-│   └── 09-build-nvgpu.sh        ← Full build: nvgpu extension + kernel + installer
+│   ├── 09-build-nvgpu.sh        ← Full build: nvgpu extension + kernel + installer
+│   └── 10-setup-cdi.sh          ← Deploy CDI stack (recommended GPU setup)
 │
-├── keys/                        ← Kernel module signing key pair (see note below)
-│   ├── signing_key.pem          ← RSA-4096 private key
+├── keys/                        ← !! gitignored — generate once with make keys
+│   ├── signing_key.pem          ← RSA-4096 private key (never commit)
 │   └── signing_key.x509         ← X.509 certificate (embedded in kernel)
 │
-├── logs/                        ← UART serial logs from boot sessions
-│   └── uart-run-1..12.log
+├── logs/                        ← !! gitignored — UART serial logs (local only)
 │
 ├── Makefile                     ← Convenience targets (wraps scripts/)
 ├── CHANGELOG.md                 ← Release history
@@ -1306,6 +1315,97 @@ requests a governor that actually exists in the Talos kernel.
 >
 > Previously blocked by firmware and library issues — all now fixed automatically after cluster rebuild.
 
+### 13.1 CDI Stack (Recommended — OOB GPU access)
+
+The **Container Device Interface (CDI)** approach lets any container request
+`nvidia.com/gpu: 1` as a Kubernetes extended resource and receive GPU device nodes,
+JetPack r36.5 libraries, and the correct `LD_LIBRARY_PATH` — automatically, with no
+hostPath mounts or initContainers in the application manifest.
+
+#### How It Works
+
+```
+Pod spec:
+  resources.limits.nvidia.com/gpu: "1"
+          │
+          ▼
+  nvidia-device-plugin (squat/generic-device-plugin)
+  AllocateResponse → CDI device ID "nvidia.com/gpu=0"
+          │
+          ▼
+  containerd 2.x reads /var/run/cdi/nvidia-jetson.yaml (CDI spec)
+  Automatically injects into container:
+    • /dev/nvgpu/igpu0/* device nodes
+    • /dev/nvhost-* device nodes
+    • /dev/nvmap
+    • /var/lib/nvidia-tegra-libs/tegra → /usr/lib/aarch64-linux-gnu/nvidia (bind)
+    • LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:...
+```
+
+The CDI spec and all system-level setup (firmware copy, device symlinks, lib restore)
+are handled by the `nvidia-cdi-setup` DaemonSet that runs at `system-node-critical`
+priority on every boot.
+
+#### Setup (one-time, requires a node reboot for the containerd config patch)
+
+```bash
+# Apply everything in order:
+./scripts/10-setup-cdi.sh
+
+# Or step by step:
+make cluster-cdi
+```
+
+The script:
+1. Applies `manifests/talos/machine-patch-cdi.yaml` (enables CDI in containerd)
+2. Reboots the node and waits for it to come back
+3. Deploys `manifests/gpu/cdi-setup.yaml` (libs, firmware, CDI spec)
+4. Deploys `manifests/gpu/device-plugin.yaml` (exposes `nvidia.com/gpu`)
+5. Deploys `manifests/ollama/ollama-cdi.yaml` (Ollama with just `nvidia.com/gpu: 1`)
+6. Pulls `qwen2.5:1.5b` and prints a test command
+
+#### What the Ollama CDI manifest looks like
+
+```yaml
+containers:
+  - name: ollama
+    image: dustynv/ollama:r36.4.0
+    resources:
+      limits:
+        nvidia.com/gpu: "1"    # ← that's it — CDI handles the rest
+    # No initContainer, no hostPath /dev, no hostPath libs, no LD_LIBRARY_PATH
+```
+
+#### Diagnostics
+
+```bash
+KC=~/PycharmProjects/jetson-test/kubeconfig
+
+# GPU resource visible on node?
+kubectl --kubeconfig $KC get node -o jsonpath='{.items[0].status.capacity.nvidia\.com/gpu}'
+# Expected: 1
+
+# CDI spec contents
+kubectl --kubeconfig $KC exec -n nvidia-system \
+  $(kubectl --kubeconfig $KC get pod -n nvidia-system -l app=nvidia-cdi-setup \
+    -o jsonpath='{.items[0].metadata.name}') \
+  -- cat /var/run/cdi/nvidia-jetson.yaml
+
+# Device plugin logs
+kubectl --kubeconfig $KC logs -n nvidia-system -l app=nvidia-device-plugin
+
+# CDI setup logs
+kubectl --kubeconfig $KC logs -n nvidia-system -l app=nvidia-cdi-setup -c cdi-writer
+kubectl --kubeconfig $KC logs -n nvidia-system -l app=nvidia-cdi-setup -c restore-libs
+```
+
+---
+
+### 13.2 Legacy hostPath Approach
+
+The original approach before CDI was implemented. Still functional but requires
+manual hostPath mounts and an initContainer in the Ollama manifest.
+
 ### Step 1 — Deploy gpu-libs-restore DaemonSet (replaces manual Job)
 
 The `dustynv/ollama` container carries **0-byte stub libraries** for the NVIDIA CUDA
@@ -1833,7 +1933,7 @@ talosctl --talosconfig ~/PycharmProjects/jetson-test/talosconfig \
 | Undefined L4T symbols | `nvmap_dma_free_attrs`, `tegra_vpr_dev` are stubs | Not reached during CUDA compute; would oops if called |
 | `install.extensions` deprecated in v1.12 | Validation warning | Functional; migrate to overlay installer in future |
 | ~~CUDA GPU acceleration blocked~~ | ~~Fixed in nvgpu 5.0.0~~ | **RESOLVED** — GPU fully working. `cuInit` succeeds; Ollama runs with `library=cuda variant=jetpack6`; 29/29 layers on GPU; ~7–8 tok/s decode, ~460 tok/s prefill. Two firmware fixes required: (1) redirect `firmware_class.path` to NVMe to avoid `-ETXTBSY`, (2) download `pmu_pkc_prod_sig.bin` from NVIDIA APT. See Section 12 Bug 5 & 6. |
-| dustynv Ollama stub libraries | `dustynv/ollama:r36.4.0` carries 0-byte stubs for `libnvrm_gpu.so`, `libcuda.so.1.1` etc. — NVIDIA Container Runtime normally injects real host libs, not present on Talos | Fixed: download real r36.5 libs from NVIDIA APT and mount via hostPath — see Step 1 in Section 12 |
+| dustynv Ollama stub libraries | `dustynv/ollama:r36.4.0` carries 0-byte stubs for `libnvrm_gpu.so`, `libcuda.so.1.1` etc. — NVIDIA Container Runtime normally injects real host libs, not present on Talos | **Fixed (CDI)**: `nvidia-cdi-setup` DaemonSet downloads r36.5 libs; CDI spec bind-mounts them automatically into any container requesting `nvidia.com/gpu: 1`. No manual steps needed. |
 | ~~JetPack libs lost after full wipe~~ | ~~The real libs in `/var/lib/nvidia-tegra-libs/` live in EPHEMERAL. A `--wipe-mode all` reset deletes them~~ | **RESOLVED** — `gpu-libs-restore` DaemonSet auto-restores on boot. No manual Job needed. |
 | ~~GPU firmware lost after full wipe~~ | ~~`/var/fw-fresh/ga10b/` (incl. `pmu_pkc_prod_sig.bin`) lives in EPHEMERAL~~ | **RESOLVED** — `pmu_pkc_prod_sig.bin` baked into `nvidia-firmware-ext:v5`; Ollama initContainer copies it automatically. |
 | ~~`pmu_pkc_prod_sig.bin` missing from nvidia-firmware-ext~~ | ~~The system extension at `/usr/lib/firmware/ga10b/` was missing this PKC signature file; without it nvgpu panics on GPU init~~ | **RESOLVED** — Added to `nvidia-firmware-ext:v5` at build time (downloaded from NVIDIA APT). |

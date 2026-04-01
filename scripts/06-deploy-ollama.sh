@@ -16,7 +16,7 @@ source "$(dirname "$0")/common.sh"
 
 NODE_IP="${NODE_IP:-10.0.10.38}"
 KUBECONFIG_PATH="${KUBECONFIG_PATH:-${REPO_ROOT}/kubeconfig}"
-OLLAMA_MANIFEST="${REPO_ROOT}/ollama-deployment.yaml"
+OLLAMA_MANIFEST="${REPO_ROOT}/manifests/ollama/ollama-deployment.yaml"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:1.5b}"
 OLLAMA_PORT="${OLLAMA_PORT:-31434}"
 
