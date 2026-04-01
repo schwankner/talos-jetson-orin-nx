@@ -80,6 +80,13 @@ spec:
     metadata:
       labels:
         app: ollama
+      annotations:
+        # CDI pod annotation — tells containerd 2.x to inject the CDI device "nvidia.com/gpu=0"
+        # from the spec at /var/run/cdi/nvidia-jetson.yaml.  This injects all nvgpu + nvhost
+        # device nodes, the JetPack r36.5 library bind-mount, and LD_LIBRARY_PATH automatically.
+        # The device plugin (nvidia.com/gpu resource) handles Kubernetes scheduling;
+        # this annotation handles the actual containerd-level device + lib injection.
+        cdi.k8s.io/gpu0: "nvidia.com/gpu=0"
     spec:
       tolerations:
         - operator: Exists
