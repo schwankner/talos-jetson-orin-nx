@@ -8,9 +8,7 @@
 #   NVGPU_VERSION    nvidia-tegra-nvgpu extension version       (default: 5.1.0)
 #   NODE_IP          Jetson IP address                          (default: 192.168.1.50)
 
-.PHONY: all keys build-extensions build-kernel uki usb \
-        cluster-apply cluster-bootstrap cluster-cdi \
-        help clean
+.PHONY: all keys build-extensions build-kernel uki usb help clean
 
 # ── Default: build UKI + USB image ──────────────────────────────────────────
 all: uki usb
@@ -35,16 +33,6 @@ uki:
 usb: uki
 	./scripts/02-build-usb-image.sh
 
-# ── Cluster lifecycle ────────────────────────────────────────────────────────
-cluster-apply:
-	./scripts/03-apply-config.sh
-
-cluster-bootstrap:
-	./scripts/05-bootstrap-cluster.sh
-
-cluster-cdi:
-	./scripts/10-setup-cdi.sh
-
 # ── Clean build outputs (not committed anyway) ───────────────────────────────
 clean:
 	rm -rf dist/ imager-out-*/
@@ -52,7 +40,7 @@ clean:
 # ── Help ─────────────────────────────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "  Talos Linux — NVIDIA Jetson Orin NX (reComputer J4012)"
+	@echo "  Talos Linux — NVIDIA Jetson Orin NX (Seeed Studio reComputer J4012)"
 	@echo ""
 	@echo "  Build targets:"
 	@echo "    make all              Build UKI + USB image (default)"
@@ -61,17 +49,13 @@ help:
 	@echo "    make uki              Assemble UKI from registry images"
 	@echo "    make usb              Create bootable USB disk image"
 	@echo "    make keys             (Re-)generate kernel module signing key"
-	@echo ""
-	@echo "  Cluster targets:"
-	@echo "    make cluster-apply      Apply Talos machine config"
-	@echo "    make cluster-bootstrap  Bootstrap etcd + retrieve credentials"
-	@echo "    make cluster-cdi        Deploy CDI stack (GPU access in pods)"
-	@echo ""
-	@echo "  Misc:"
 	@echo "    make clean            Remove dist/ and intermediate build output"
 	@echo ""
 	@echo "  Key overrides:"
 	@echo "    REGISTRY=<host:port>  Local OCI registry (default: 192.168.1.100:5001)"
 	@echo "    NVGPU_VERSION=<ver>   nvgpu extension version (default: 5.1.0)"
 	@echo "    NODE_IP=<ip>          Jetson node IP (default: 192.168.1.50)"
+	@echo ""
+	@echo "  Alternative: use GitHub Actions (.github/workflows/build-usb.yaml)"
+	@echo "    Push a tag → USB image built in the cloud, uploaded as release artifact"
 	@echo ""
