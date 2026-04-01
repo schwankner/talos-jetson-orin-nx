@@ -2,12 +2,12 @@ name: Build Extensions
 
 # Builds kernel + GPU driver extensions and pushes to ghcr.io.
 # Run this ONCE after updating Talos, kernel, or nvgpu versions.
-# Extensions are cached in ghcr.io — subsequent runs are auto-skipped.
+# Subsequent runs auto-skip if extension images are already cached in ghcr.io.
 #
-# After this completes, trigger "Build USB Image" to assemble the .raw file.
+# Runtime: ~90 min (cold cache), ~5 min (cache hit).
+# After this completes, trigger "Build USB Image" to produce the .raw file.
 #
-# Runtime: ~90 min native (first run). Subsequent runs: ~5 min (cache hit).
-# Uses standard ubuntu-latest runner with QEMU arm64 cross-compilation.
+# For public repositories: GitHub Actions minutes are free (no monthly limit).
 
 on:
   workflow_dispatch:
@@ -24,11 +24,15 @@ on:
         description: 'Force rebuild even if images already in ghcr.io (true/false)'
         required: false
         default: 'false'
+      runner:
+        description: 'Runner label (ubuntu-24.04-arm / ubuntu-22.04-arm / ubuntu-latest)'
+        required: false
+        default: 'ubuntu-24.04-arm'
 
 jobs:
   build-extensions:
     name: Build extensions
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04-arm' }}
     permissions:
       contents: read
       packages: write
@@ -57,14 +61,8 @@ jobs:
             echo "✓ ${IMAGE} already in ghcr.io — skipping build"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Will build: ${IMAGE} not found or force_rebuild=true"
+            echo "Will build: ${IMAGE}"
           fi
-
-      - name: Set up QEMU (arm64 cross-compilation)
-        if: steps.check_cache.outputs.skip != 'true'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Docker Buildx
         if: steps.check_cache.outputs.skip != 'true'
@@ -81,7 +79,7 @@ jobs:
           chmod 600 keys/signing_key.pem
           openssl x509 -in keys/signing_key.x509 -noout -serial
 
-      - name: Free disk space for kernel build (~40 GB needed)
+      - name: Free disk space for kernel build
         if: steps.check_cache.outputs.skip != 'true'
         run: |
           sudo apt-get remove -y --purge '^dotnet-.*' '^llvm-.*' '^php.*' \
@@ -91,20 +89,10 @@ jobs:
                       /usr/local/share/boost /usr/local/graalvm
           df -h /
 
-      - name: Restore BuildKit GHA cache
-        if: steps.check_cache.outputs.skip != 'true'
-        uses: actions/cache@v4
-        with:
-          path: /tmp/buildkit-cache
-          key: buildkit-ext-${{ hashFiles('scripts/09-build-nvgpu.sh', 'scripts/common.sh') }}-${{ github.sha }}
-          restore-keys: |
-            buildkit-ext-${{ hashFiles('scripts/09-build-nvgpu.sh', 'scripts/common.sh') }}-
-            buildkit-ext-
-
       - name: Build + push extensions to ghcr.io
         if: steps.check_cache.outputs.skip != 'true'
         run: make build-extensions
-        timeout-minutes: 360
+        timeout-minutes: 180
         env:
           REGISTRY: ghcr.io/${{ github.repository_owner }}
           REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
