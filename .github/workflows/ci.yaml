@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "release-*"]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, "release-*"]
+
+jobs:
+  # ── Shell script linting ────────────────────────────────────────────────────
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "./scripts"
+          severity: warning
+          additional_files: "scripts/common.sh"
+
+  # ── YAML validation ─────────────────────────────────────────────────────────
+  validate-yaml:
+    name: Validate YAML
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate imager profiles
+        run: |
+          for f in profiles/*.yaml; do
+            python3 -c "import yaml, sys; yaml.safe_load(open('$f'))" \
+              && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+      - name: Validate manifests
+        run: |
+          for f in manifests/**/*.yaml manifests/**/*.example; do
+            # Skip non-yaml examples
+            [[ "$f" == *.yaml || "$f" == *.yaml.example ]] || continue
+            python3 -c "import yaml, sys; yaml.safe_load(open('$f'))" \
+              && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+          done
+
+  # ── Release ─────────────────────────────────────────────────────────────────
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [shellcheck, validate-yaml]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Extract section for this version between the first two ## headings
+          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body: ${{ steps.changelog.outputs.notes }}
+          files: |
+            profiles/*.yaml
