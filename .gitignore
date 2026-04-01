@@ -46,5 +46,10 @@ __MACOSX/
 # ── Claude Code internal state ────────────────────────────────────────────────
 .claude/
 
+# ── Day-2 operational files (kept locally only) ───────────────────────────────
+manifests/ollama/
+scripts/06-deploy-ollama.sh
+scripts/07-install-l4t-libs.sh
+
 # ── Intermediate imager output directories ────────────────────────────────────
 imager-out-v*/

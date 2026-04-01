@@ -1,0 +1,88 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Talos Linux on Jetson Orin NX — dependency update config",
+  "extends": [
+    "config:base",
+    ":dependencyDashboard"
+  ],
+  "labels": ["dependencies"],
+  "assignees": ["schwankner"],
+  "reviewers": ["schwankner"],
+  "packageRules": [
+    {
+      "description": "Talos Linux version — requires full rebuild",
+      "matchManagers": ["regex"],
+      "matchFileNames": ["scripts/common.sh"],
+      "matchDepNames": ["talos"],
+      "commitMessageTopic": "Talos Linux",
+      "commitMessageExtra": "(full rebuild required)",
+      "labels": ["dependencies", "breaking-change"]
+    },
+    {
+      "description": "Group all Talos-related updates",
+      "matchManagers": ["regex"],
+      "matchFileNames": ["scripts/common.sh"],
+      "groupName": "Talos stack",
+      "groupSlug": "talos-stack"
+    },
+    {
+      "description": "Docker base images in Dockerfiles",
+      "matchManagers": ["dockerfile"],
+      "automerge": false
+    },
+    {
+      "description": "GitHub Actions — automerge patch versions",
+      "matchManagers": ["github-actions"],
+      "automerge": true,
+      "automergeType": "pr",
+      "matchUpdateTypes": ["patch"]
+    },
+    {
+      "description": "GitHub Actions — require manual review for major/minor",
+      "matchManagers": ["github-actions"],
+      "automerge": false,
+      "matchUpdateTypes": ["major", "minor"]
+    }
+  ],
+  "regexManagers": [
+    {
+      "description": "Talos version in common.sh",
+      "fileMatch": ["^scripts/common\\.sh$"],
+      "matchStrings": [
+        "TALOS_VERSION=\"\\$\\{TALOS_VERSION:-(?<currentValue>[^}\"]+)\\}\""
+      ],
+      "depNameTemplate": "siderolabs/talos",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
+    },
+    {
+      "description": "Kernel version in common.sh",
+      "fileMatch": ["^scripts/common\\.sh$"],
+      "matchStrings": [
+        "KERNEL_VERSION=\"\\$\\{KERNEL_VERSION:-(?<currentValue>[^}\"]+)\\}\""
+      ],
+      "depNameTemplate": "torvalds/linux",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v?(?<version>.*)$",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "description": "Talos version in GitHub Actions workflows",
+      "fileMatch": ["^\\.github/workflows/.+\\.ya?ml$"],
+      "matchStrings": [
+        "TALOS_VERSION: '(?<currentValue>[^']+)'"
+      ],
+      "depNameTemplate": "siderolabs/talos",
+      "datasourceTemplate": "github-releases"
+    }
+  ],
+  "ignoreDeps": [
+    "nvidia-tegra-nvgpu",
+    "nvidia-firmware-ext",
+    "kernel-modules-clang"
+  ],
+  "schedule": ["every weekend"],
+  "prCreation": "not-pending",
+  "prHourlyLimit": 2,
+  "prConcurrentLimit": 5
+}

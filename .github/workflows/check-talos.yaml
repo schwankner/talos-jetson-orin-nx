@@ -1,0 +1,100 @@
+name: Check for new Talos release
+
+on:
+  schedule:
+    # Run daily at 08:00 UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Check Talos release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get current Talos version
+        id: current
+        run: |
+          # Read the default from common.sh
+          CURRENT=$(grep 'TALOS_VERSION=' scripts/common.sh | grep -v '#' | head -1 \
+            | sed 's/.*:-\(.*\)".*/\1/')
+          echo "version=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "Current Talos version: ${CURRENT}"
+
+      - name: Get latest Talos release
+        id: latest
+        run: |
+          LATEST=$(curl -fsSL \
+            "https://api.github.com/repos/siderolabs/talos/releases/latest" \
+            | jq -r '.tag_name')
+          echo "version=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "Latest Talos version: ${LATEST}"
+
+      - name: Compare versions
+        id: compare
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          LATEST="${{ steps.latest.outputs.version }}"
+
+          if [ "${CURRENT}" = "${LATEST}" ]; then
+            echo "Up to date: ${CURRENT}"
+            echo "update_needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Update available: ${CURRENT} → ${LATEST}"
+            echo "update_needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for existing open issue
+        if: steps.compare.outputs.update_needed == 'true'
+        id: existing_issue
+        run: |
+          LATEST="${{ steps.latest.outputs.version }}"
+          # Search for open issues with this version in the title
+          ISSUE_COUNT=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --state open \
+            --search "New Talos release: ${LATEST}" \
+            --json number \
+            --jq 'length')
+          echo "existing=${ISSUE_COUNT}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Open issue for new Talos release
+        if: |
+          steps.compare.outputs.update_needed == 'true' &&
+          steps.existing_issue.outputs.existing == '0'
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          LATEST="${{ steps.latest.outputs.version }}"
+
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "New Talos release: ${LATEST} (current: ${CURRENT})" \
+            --label "dependencies" \
+            --body "$(cat <<EOF
+          A new Talos Linux release is available.
+
+          | | Version |
+          |---|---|
+          | **Current** | \`${CURRENT}\` |
+          | **Latest** | \`${LATEST}\` |
+
+          ## Action required
+
+          1. Check the [Talos ${LATEST} release notes](https://github.com/siderolabs/talos/releases/tag/${LATEST}) for breaking changes
+          2. Find the matching \`siderolabs/pkgs\` commit for \`${LATEST}\` (branch \`release-X.Y\`)
+          3. Update \`scripts/common.sh\`:
+             \`\`\`bash
+             TALOS_VERSION="\${TALOS_VERSION:-${LATEST}}"
+             \`\`\`
+          4. Rebuild extensions + kernel: \`make build-extensions\`
+          5. Tag a new release to trigger the [USB build workflow](https://github.com/${{ github.repository }}/actions/workflows/build-usb.yaml)
+
+          EOF
+          )"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
