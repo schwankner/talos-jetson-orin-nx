@@ -1,0 +1,91 @@
+---
+# gpu-libs-restore DaemonSet
+#
+# Automatically restores JetPack r36.5 userspace libraries to /var/lib/nvidia-tegra-libs/tegra/
+# on the Talos node after every full cluster rebuild (--wipe-mode all wipes EPHEMERAL = /var).
+#
+# Background:
+#   The dustynv/ollama container carries 0-byte stub libraries. Real JetPack libs are
+#   downloaded from NVIDIA APT and stored at /var/lib/nvidia-tegra-libs/tegra/ on the node,
+#   then mounted into the container via hostPath. After a full wipe, EPHEMERAL (/var) is gone
+#   and the libs must be re-downloaded. This DaemonSet does that automatically on startup.
+#
+# Apply: kubectl apply -f gpu-libs-restore.yaml
+# (applied automatically by scripts/07-install-l4t-libs.sh)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-libs-restore
+  namespace: ollama
+  labels:
+    app: gpu-libs-restore
+spec:
+  selector:
+    matchLabels:
+      app: gpu-libs-restore
+  template:
+    metadata:
+      labels:
+        app: gpu-libs-restore
+    spec:
+      tolerations:
+        - operator: Exists
+      priorityClassName: system-node-critical
+      initContainers:
+        - name: restore-libs
+          image: ubuntu:22.04
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              DEST=/nvidia-libs/tegra
+              CUDA_LIB="${DEST}/libcuda.so.1.1"
+              MIN_SIZE=1000000  # 1 MB — real libcuda.so.1.1 is 41 MB; 0-byte stubs are 0
+
+              if [ -f "${CUDA_LIB}" ] && [ "$(stat -c%s ${CUDA_LIB} 2>/dev/null || echo 0)" -gt ${MIN_SIZE} ]; then
+                echo "JetPack r36.5 libs already present ($(ls ${DEST} | wc -l) files, libcuda=$(stat -c%s ${CUDA_LIB}) bytes). Skipping."
+                exit 0
+              fi
+
+              echo "JetPack libs missing or stale. Installing from NVIDIA APT r36.5..."
+              apt-get update -qq && apt-get install -y -qq curl dpkg
+
+              rm -rf ${DEST} && mkdir -p ${DEST}
+              cd /tmp
+
+              BASE="https://repo.download.nvidia.com/jetson/t234/pool/main/n"
+              VER="36.5.0-20260115194252"
+
+              curl -fsSL -o l4t-core.deb "${BASE}/nvidia-l4t-core/nvidia-l4t-core_${VER}_arm64.deb"
+              curl -fsSL -o l4t-cuda.deb "${BASE}/nvidia-l4t-cuda/nvidia-l4t-cuda_${VER}_arm64.deb"
+              curl -fsSL -o l4t-3d.deb   "${BASE}/nvidia-l4t-3d-core/nvidia-l4t-3d-core_${VER}_arm64.deb"
+
+              for pkg in l4t-core.deb l4t-cuda.deb l4t-3d.deb; do
+                dpkg-deb -x $pkg /tmp/extract-$pkg/
+                find /tmp/extract-$pkg -path '*/aarch64-linux-gnu/tegra/*' -type f -exec cp {} ${DEST}/ \;
+                find /tmp/extract-$pkg -path '*/aarch64-linux-gnu/nvidia/*' -type f -exec cp {} ${DEST}/ \;
+                rm -rf /tmp/extract-$pkg/ $pkg
+              done
+
+              # Ensure libcuda.so.1 symlink exists (needed by LD_LIBRARY_PATH resolution)
+              ln -sf libcuda.so.1.1 ${DEST}/libcuda.so.1 2>/dev/null || true
+
+              echo "Done. $(ls ${DEST} | wc -l) libs installed."
+              echo "  libcuda.so.1.1: $(stat -c%s ${DEST}/libcuda.so.1.1 2>/dev/null || echo MISSING) bytes"
+              echo "  libnvrm_gpu.so: $(stat -c%s ${DEST}/libnvrm_gpu.so 2>/dev/null || echo MISSING) bytes"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: nvidia-libs
+              mountPath: /nvidia-libs
+      containers:
+        # Pause container — keeps the DaemonSet pod running so it's visible and restartable.
+        # On the next node restart (e.g. after another wipe), the initContainer runs again
+        # and re-checks / re-installs libs as needed.
+        - name: pause
+          image: gcr.io/google_containers/pause:3.1
+      volumes:
+        - name: nvidia-libs
+          hostPath:
+            path: /var/lib/nvidia-tegra-libs
+            type: DirectoryOrCreate
