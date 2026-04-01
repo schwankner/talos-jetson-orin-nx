@@ -20,7 +20,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-NODE_IP="${NODE_IP:-10.0.10.38}"
+NODE_IP="${NODE_IP:-192.168.1.50}"
 CONFIG="${CONFIG:-${REPO_ROOT}/controlplane.yaml}"
 TALOSCONFIG_PATH="${TALOSCONFIG_PATH:-${REPO_ROOT}/talosconfig}"
 INSECURE="${1:-}"
