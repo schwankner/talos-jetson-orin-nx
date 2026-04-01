@@ -28,17 +28,24 @@ INSECURE="${1:-}"
 check_talosctl
 [[ -f "${CONFIG}" ]] || error "Config not found: ${CONFIG}"
 
+CDI_PATCH="${REPO_ROOT}/manifests/talos/machine-patch-cdi.yaml"
+[[ -f "${CDI_PATCH}" ]] || error "CDI patch not found: ${CDI_PATCH}"
+
 if [[ "${INSECURE}" == "--insecure" ]]; then
   info "Applying config in MAINTENANCE MODE (insecure) to ${NODE_IP}"
   info "Node must be booted from USB with NVMe STATE wiped."
+  info "Including CDI machine patch (enables CDI in containerd)..."
   talosctl --nodes "${NODE_IP}" --endpoints "${NODE_IP}" --insecure \
-    apply-config --file "${CONFIG}"
+    apply-config --file "${CONFIG}" \
+    --config-patch "@${CDI_PATCH}"
 else
   info "Applying config to running node ${NODE_IP} (mode: reboot)"
+  info "Including CDI machine patch (enables CDI in containerd)..."
   [[ -f "${TALOSCONFIG_PATH}" ]] || error "talosconfig not found: ${TALOSCONFIG_PATH}"
   talosctl --talosconfig "${TALOSCONFIG_PATH}" \
     --nodes "${NODE_IP}" --endpoints "${NODE_IP}" \
-    apply-config --file "${CONFIG}" --mode=reboot
+    apply-config --file "${CONFIG}" --mode=reboot \
+    --config-patch "@${CDI_PATCH}"
 fi
 
 info "Config applied. Waiting for node to come back..."
