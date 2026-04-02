@@ -55,12 +55,17 @@ bash "$(dirname "$0")/00-setup-keys.sh"
 [[ -f "${TALOS_PKGS_DIR}/kernel/build/config-arm64" ]] \
   || error "kernel/build/config-arm64 missing. Fetch from siderolabs/pkgs@a92bed5."
 
-# Verify config-arm64 uses talos_signing_key.pem (not signing_key.pem which make auto-regenerates)
+# Ensure config-arm64 uses talos_signing_key.pem (make won't auto-regenerate it)
+# Auto-patch if the official signing_key.pem name is still present
+if grep -q 'CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"' \
+    "${TALOS_PKGS_DIR}/kernel/build/config-arm64"; then
+  sed -i 's|CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"|CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"|g' \
+    "${TALOS_PKGS_DIR}/kernel/build/config-arm64"
+  info "  Auto-patched config-arm64: signing_key.pem → talos_signing_key.pem"
+fi
 if ! grep -q 'CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"' \
     "${TALOS_PKGS_DIR}/kernel/build/config-arm64"; then
-  error "kernel/build/config-arm64 must have CONFIG_MODULE_SIG_KEY=\"certs/talos_signing_key.pem\"
-  Run: sed -i 's|CONFIG_MODULE_SIG_KEY=.*|CONFIG_MODULE_SIG_KEY=\"certs/talos_signing_key.pem\"|' \\
-       ${TALOS_PKGS_DIR}/kernel/build/config-arm64"
+  error "kernel/build/config-arm64 does not have CONFIG_MODULE_SIG_KEY=\"certs/talos_signing_key.pem\""
 fi
 
 cd "${TALOS_PKGS_DIR}"
