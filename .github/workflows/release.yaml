@@ -24,16 +24,4 @@ jobs:
           printf '%s' "${{ secrets.SIGNING_KEY_PEM }}"  > keys/signing_key.pem
           printf '%s' "${{ secrets.SIGNING_KEY_X509 }}" > keys/signing_key.x509
           chmod 600 keys/signing_key.pem
-
-      - name: Build + locate image
-        run: |
-          make usb
-          RAW=$(ls dist/*.raw dist/*.raw.zst 2>/dev/null | head -1)
-          echo "path=${RAW}" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "${RAW}")" >> "$GITHUB_OUTPUT"
-          ls -lh dist/
-        id: build
-        timeout-minutes: 30
-        env:
-          REGISTRY: ghcr.io/${{ github.repository_owner }}
-          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
+          echo "keys restored"
