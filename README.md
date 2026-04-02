@@ -50,21 +50,25 @@ All Orin boards share the same T234 SoC and boot via UEFI (EDK2 firmware in SPI 
 Device Tree is loaded from the board's own SPI flash — no board-specific image variant is
 needed. **One USB image works for the entire Orin family.**
 
-| Module | Status | Notes |
-|--------|--------|-------|
-| **Jetson Orin NX 16 GB** | ✅ Tested | Developed on this module (reComputer J4012) |
-| **Jetson Orin NX 8 GB** | ✅ Compatible | Same T234/GA10B, reduced LPDDR5 |
-| **Jetson Orin Nano 8 GB** | ✅ Compatible | Same T234/GA10B, lower TDP (15 W) |
-| **Jetson Orin Nano 4 GB** | ✅ Compatible | Same T234/GA10B, fewer CPU cores active |
-| **Jetson AGX Orin 32/64 GB** | ✅ Compatible | Same T234/GA10B, more CPU/GPU/DLA enabled |
-| **Jetson AGX Xavier / Xavier NX** | ❌ Not compatible | Different GPU: Volta GV11B (SM 7.2), requires separate nvgpu branch |
-| **Jetson TX2** | ❌ Not compatible | Pascal GP10B GPU, different OOT driver tree entirely |
-| **Jetson Nano (classic)** | ❌ Not compatible | Maxwell GPU, no UEFI boot |
+| Year | Module | SoC / GPU | Status | Notes |
+|------|--------|-----------|--------|-------|
+| 2023 | **Jetson AGX Orin** (32/64 GB) | T234 / GA10B Ampere | ✅ Compatible | Same SoC/GPU as NX; more CPU cores, DLA, higher TDP (15–60 W) |
+| 2023 | **Jetson Orin NX** (8/16 GB) | T234 / GA10B Ampere | ✅ **Tested** | Developed on Orin NX 16 GB (reComputer J4012) |
+| 2023 | **Jetson Orin Nano** (4/8 GB) | T234 / GA10B Ampere | ✅ Compatible | Same SoC/GPU; fewer active CPU cores, lower TDP (7–25 W), no DLA |
+| 2025 | **Jetson AGX Thor** | GB10 / Blackwell | ⚠️ Unknown | Different SoC and GPU architecture (Blackwell); nvgpu OOT driver untested — no OE4T support yet |
+| 2018 | **Jetson AGX Xavier** (8/32/64 GB) | T194 / GV11B Volta SM 7.2 | ❌ Not compatible | Different GPU architecture; would need a separate `nvgpu` build targeting GV11B |
+| 2020 | **Jetson Xavier NX** | T194 / GV11B Volta SM 7.2 | ❌ Not compatible | Same T194/GV11B as AGX Xavier — incompatible OOT driver |
+| 2017 | **Jetson TX2** | T186 / GP10B Pascal | ❌ Not compatible | Pascal GPU; completely different OOT driver tree, no UEFI boot |
+| 2019 | **Jetson Nano** (4 GB) | T210 / Maxwell | ❌ Not compatible | Maxwell GPU; no UEFI — uses U-Boot + extlinux, requires a [board overlay](https://github.com/siderolabs/overlays) |
+| 2015 | **Jetson TX1** | T210 / Maxwell | ❌ Not compatible | Same T210 as Nano — no UEFI, Maxwell GPU |
+| 2014 | **Jetson TK1** | T124 / Kepler | ❌ Not compatible | ARMv7 (32-bit only); Talos requires AArch64 |
 
-> **Why one image?** Jetson Orin uses EDK2 UEFI firmware (stored in SPI flash) for boot. The
-> board-specific Device Tree Blob is supplied by the UEFI firmware from the board's own SPI flash,
-> not from the USB image. Our UKI is a standard `platform: metal` UEFI image with no board overlay —
-> identical to how Talos boots on x86 servers.
+> **Why one image for all Orin variants?** Jetson Orin uses EDK2 UEFI firmware stored in SPI
+> flash for boot. The board-specific Device Tree Blob is supplied by the UEFI firmware from the
+> board's own SPI flash, not from the USB image. Our UKI is a standard `platform: metal` UEFI
+> image with no board overlay — identical to how Talos boots on x86 servers. Older Jetson
+> generations that lack UEFI require a [board-specific overlay](https://github.com/siderolabs/overlays)
+> (U-Boot + extlinux), which this project does not provide.
 
 > Tried it on a specific Orin module? **Open an issue** with your UART boot log — we'd love to
 > confirm compatibility and update this table.
