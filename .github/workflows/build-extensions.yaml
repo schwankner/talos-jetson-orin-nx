@@ -13,6 +13,7 @@ name: Build Extensions
 
 on:
   workflow_dispatch:
+  workflow_call:   # allow release.yaml to call this as a reusable workflow
 
 jobs:
   build-extensions:

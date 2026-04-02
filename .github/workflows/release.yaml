@@ -6,9 +6,25 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# workflow-level: must cover everything any job below needs
+permissions:
+  contents: write
+  packages: write
+
 jobs:
+  # ── Job 1: Build kernel + GPU extensions (skips automatically if cached) ───
+  build-extensions:
+    name: Build extensions (skip if cached)
+    uses: ./.github/workflows/build-extensions.yaml
+    secrets: inherit
+    permissions:
+      contents: read
+      packages: write
+
+  # ── Job 2: Assemble UKI + USB image ────────────────────────────────────────
   build-usb:
     name: Assemble UKI + USB image
+    needs: build-extensions
     runs-on: ubuntu-latest
 
     permissions:
