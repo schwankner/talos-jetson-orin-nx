@@ -168,7 +168,6 @@ All scripts read from `scripts/common.sh`. Override per-run:
 | `TALOS_VERSION` | `v1.12.6` | Talos release |
 | `KERNEL_VERSION` | `6.18.18` | Kernel version |
 | `NVGPU_VERSION` | `5.1.0` | nvgpu extension version |
-| `NODE_IP` | `192.168.1.50` | Jetson node IP |
 
 ---
 
@@ -322,10 +321,10 @@ patches to compile these against a standard upstream kernel.
 ./scripts/00-setup-keys.sh
 
 # Force-regenerate (BREAKING — rebuilds kernel + all extensions):
-FORCE_NEW_KEY=1 ./scripts/00-setup-keys.sh && make build-extensions
+FORCE_NEW_KEY=1 ./scripts/setup-keys.sh && make build-extensions
 
 # Verify key serial embedded in running kernel:
-talosctl -n 192.168.1.50 read /proc/keys | grep -i asymmetric
+talosctl -n <node-ip> read /proc/keys | grep -i asymmetric
 ```
 
 Current committed key serial: `74FD747A092BD42575ED4CBE6F7E2479A6FEC740`
@@ -361,13 +360,13 @@ devfreq governor, CDI / containerd 2.x, UBSAN netlist bug) is documented in
 ### Check module loaded + devfreq governor active
 
 ```bash
-talosctl -n 192.168.1.50 dmesg | grep -E "nvgpu|ga10b|podgov|devfreq"
+talosctl -n <node-ip> dmesg | grep -E "nvgpu|ga10b|podgov|devfreq"
 # Expected: nvgpu probe, ga10b firmware loaded, governor=nvhost_podgov
 
-talosctl -n 192.168.1.50 read /sys/class/devfreq/17000000.gpu/governor
+talosctl -n <node-ip> read /sys/class/devfreq/17000000.gpu/governor
 # nvhost_podgov
 
-talosctl -n 192.168.1.50 read /sys/class/devfreq/17000000.gpu/cur_freq
+talosctl -n <node-ip> read /sys/class/devfreq/17000000.gpu/cur_freq
 # 306000000 (idle) → scales up dynamically under load
 ```
 
