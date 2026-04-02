@@ -86,6 +86,19 @@ jobs:
           cd /tmp/talos-pkgs && git checkout "${PKGS_COMMIT}"
           echo "✓ talos-pkgs ready at $(git -C /tmp/talos-pkgs rev-parse --short HEAD)"
 
+          # Inject our custom nvidia-tegra-nvgpu pkg into the pkgs tree
+          mkdir -p /tmp/talos-pkgs/nvidia-tegra-nvgpu
+          cp "${GITHUB_WORKSPACE}/nvidia-tegra-nvgpu/pkg.yaml" \
+             /tmp/talos-pkgs/nvidia-tegra-nvgpu/pkg.yaml
+          echo "✓ nvidia-tegra-nvgpu/pkg.yaml injected"
+
+          # Patch config-arm64: use talos_signing_key.pem (make won't auto-regenerate it)
+          # The official repo uses "certs/signing_key.pem" which make can overwrite
+          sed -i 's|CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"|CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"|g' \
+            /tmp/talos-pkgs/kernel/build/config-arm64
+          grep "CONFIG_MODULE_SIG_KEY" /tmp/talos-pkgs/kernel/build/config-arm64
+          echo "✓ config-arm64 patched for reproducible signing key"
+
       - name: Build + push extensions to ghcr.io
         if: steps.check_cache.outputs.skip != 'true'
         run: make build-extensions
