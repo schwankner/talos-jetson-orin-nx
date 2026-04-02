@@ -171,24 +171,23 @@ steps:
       - |
         # ── Cross-compiler mismatch fix (GCC 15 kernel + Clang 22 modules) ────────
         # siderolabs/pkgs builds the Talos kernel with GCC 15.2, which sets
-        # CONFIG_CC_IS_GCC=y in include/config/auto.conf. The kernel Makefile then
-        # hardcodes GCC-only flags in KBUILD_CFLAGS unconditionally (no cc-option guard):
-        #   -fmin-function-alignment=8  (GCC 14+, unknown to Clang)
-        #   -fconserve-stack            (GCC-only stack optimization, unknown to Clang)
-        #   -fsanitize=bounds-strict    (GCC UBSAN variant; Clang uses plain 'bounds')
-        # Clang 22+ rejects all three as hard errors, aborting every OOT module build.
-        # Fix: strip them from /src/Makefile once, before any `make -C /src` call.
-        echo "Patching /src/Makefile: removing GCC 15 flags rejected by Clang 22+ (CONFIG_CC_IS_GCC mismatch)"
-        sed -i \
-          -e 's/-fmin-function-alignment=[0-9]*//g' \
-          -e 's/-fconserve-stack//g' \
-          -e 's/\bbounds-strict\b/bounds/g' \
-          /src/Makefile
-        [ -f /src/arch/arm64/Makefile ] && sed -i \
-          -e 's/-fmin-function-alignment=[0-9]*//g' \
-          -e 's/-fconserve-stack//g' \
-          /src/arch/arm64/Makefile || true
-        echo "Kernel Makefile patched — OOT module builds will now use Clang-compatible flags only"
+        # CONFIG_CC_IS_GCC=y in include/config/auto.conf. Every subsequent
+        # `make -C /src LLVM=1 M=...` re-reads auto.conf, causing all
+        # `ifdef CONFIG_CC_IS_GCC` blocks in kernel Makefiles to fire, adding
+        # GCC-only flags that Clang 22+ rejects as hard errors:
+        #   -fmin-function-alignment=$(CONFIG_FUNCTION_ALIGNMENT)  → expands to 8
+        #   -fconserve-stack
+        #   -fsanitize=bounds-strict  (in scripts/Makefile.ubsan)
+        #
+        # Root fix: clear CONFIG_CC_IS_GCC in auto.conf so all ifdef blocks are
+        # skipped when Clang is the compiler for OOT module builds.
+        # Also clear autoconf.h which guards the same flag at C level.
+        echo "Clearing CONFIG_CC_IS_GCC from kernel auto.conf (GCC 15 + Clang 22 mismatch fix)"
+        sed -i 's/^CONFIG_CC_IS_GCC=y$/# CONFIG_CC_IS_GCC is not set/' \
+          /src/include/config/auto.conf
+        sed -i 's/#define CONFIG_CC_IS_GCC 1/\/* CONFIG_CC_IS_GCC not set *\//' \
+          /src/include/generated/autoconf.h 2>/dev/null || true
+        echo "CONFIG_CC_IS_GCC cleared — GCC-only KBUILD flags will not be added for OOT builds"
 
         NVIDIA_OOT=/oot-src/nvidia-oot
         NVIDIA_CONFTEST=/oot-src/out/nvidia-conftest
