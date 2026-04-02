@@ -199,6 +199,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/gpu/host1x \
+          CONFIG_CC_IS_GCC= \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -213,6 +214,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/platform/tegra/mc-utils \
+          CONFIG_CC_IS_GCC= \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -238,6 +240,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/gpu/host1x-fence \
+          CONFIG_CC_IS_GCC= \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -252,6 +255,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/video/tegra/nvmap \
+          CONFIG_CC_IS_GCC= \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -270,6 +274,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/devfreq \
+          CONFIG_CC_IS_GCC= \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -290,35 +295,49 @@ steps:
           > /oot-src/out/nvidia-linux-header/Module.symvers
       - |
         echo "Building nvgpu module (OE4T patches-r36.5)..."
+        # ── GCC 15 / Clang 22 cross-compiler mismatch fix (inline, cache-safe) ──────
+        # Docker BuildKit may serve a cached nvidia-linux-header layer from before the
+        # separate patch step existed, so that patch is not guaranteed to be visible
+        # here. Fix it unconditionally, inline, immediately before the make call.
+        #
+        # The kernel was built by GCC 15, so auto.conf contains CONFIG_CC_IS_GCC=y.
+        # Every `make -C /src LLVM=1 M=...` re-reads auto.conf, triggering all
+        # `ifdef CONFIG_CC_IS_GCC` blocks and injecting GCC-only flags:
+        #   -fmin-function-alignment=$(CONFIG_FUNCTION_ALIGNMENT)  → expands to 8
+        #   -fconserve-stack           (GCC-only)
+        #   -fsanitize=bounds-strict   (scripts/Makefile.ubsan, GCC UBSAN variant)
+        # Clang 22 rejects all three as hard errors.
+        #
+        # Fix A – file level: clear CONFIG_CC_IS_GCC in auto.conf
+        sed -i 's/^CONFIG_CC_IS_GCC=y$/# CONFIG_CC_IS_GCC is not set/' \
+          /src/include/config/auto.conf
+        sed -i 's/#define CONFIG_CC_IS_GCC 1/\/* CONFIG_CC_IS_GCC not set *\//' \
+          /src/include/generated/autoconf.h 2>/dev/null || true
+        echo "CONFIG_CC_IS_GCC cleared in auto.conf"
+        # ── nvgpu source patches ─────────────────────────────────────────────────────
         # Kernel 6.18 compat: patch ALL nvgpu .c files that use NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS
-        # The conftest test for __vm_flags fails in 6.12+ (field renamed/removed)
-        # so NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS is never set. Force the fix everywhere.
         grep -rl "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" /oot-src/nvgpu/drivers/gpu/nvgpu/ \
           | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if 1 /* force: kernel 6.3+ */|g"
         echo "Patched all nvgpu files: always use vm_flags_set on kernel 6.3+"
-        # Clang 18+ treats several warnings as errors. Suppress them globally.
-        # -Wno-implicit-fallthrough: missing fallthrough annotation in switch (clk_prog.c)
-        # -Wno-parentheses-equality: extraneous () in comparison (clk_vf_point.c)
-        # -Wno-incompatible-function-pointer-types: devnode callbacks lack const (ioctl.c)
+        # Clang 18+ treats several warnings as errors — suppress globally
         sed -i '1s|^|ccflags-y += -Wno-implicit-fallthrough -Wno-parentheses-equality -Wno-incompatible-function-pointer-types -Wno-sometimes-uninitialized\n|' \
           /oot-src/nvgpu/drivers/gpu/nvgpu/Makefile
         echo "Patched nvgpu Makefile: disabled clang compat warnings"
-        # ioctl.c:433: class_create(THIS_MODULE, name) -> class_create(name) in kernel 6.4+
+        # class_create(THIS_MODULE, name) -> class_create(name) in kernel 6.4+
         grep -rl "class_create(THIS_MODULE," /oot-src/nvgpu/drivers/gpu/nvgpu/ \
           | xargs -r sed -i 's/class_create(THIS_MODULE, /class_create(/g'
         echo "Patched nvgpu files: class_create kernel 6.4+ compat"
         # platform_ga10b_tegra.c: guard nvgpu_nvhost_syncpt_init with CONFIG_TEGRA_GK20A_NVHOST
-        # This call is unguarded in upstream source but only declared when NVHOST=y
         GA10B=/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/platform_ga10b_tegra.c
         awk '/nvgpu_nvhost_syncpt_init\(platform->g\)/{print "#ifdef CONFIG_TEGRA_GK20A_NVHOST"; in_syncpt=1} {print} in_syncpt && /^\t\}$/{print "#endif /* CONFIG_TEGRA_GK20A_NVHOST */"; in_syncpt=0}' "$GA10B" > "$GA10B.tmp" && mv "$GA10B.tmp" "$GA10B"
         echo "Patched platform_ga10b_tegra.c: nvgpu_nvhost_syncpt_init guard added"
-        # platform_ga10b_tegra.c: keep "nvhost_podgov" — governor_pod_scaling.ko is built
-        # below and ships in this extension. nvgpu's softdep=pre:governor_pod_scaling ensures
-        # modprobe loads it first, so devfreq_add_device("nvhost_podgov") succeeds.
-        echo "platform_ga10b_tegra.c: devfreq governor kept as nvhost_podgov (governor_pod_scaling.ko included)"
+        echo "platform_ga10b_tegra.c: devfreq governor kept as nvhost_podgov"
+        # Fix B – make level: pass CONFIG_CC_IS_GCC= on the command line so GNU make
+        # treats it as empty (undefined for ifdef) even if auto.conf is re-read.
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=/oot-src/nvgpu/drivers/gpu/nvgpu \
+          CONFIG_CC_IS_GCC= \
           CONFIG_TEGRA_OOT_MODULE=m \
           CONFIG_GK20A=m \
           CONFIG_TEGRA_GK20A_NVHOST=n \
