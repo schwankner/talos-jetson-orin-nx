@@ -70,9 +70,39 @@ fi
 
 cd "${TALOS_PKGS_DIR}"
 
+# ── Build cache args (populated when CACHE_REGISTRY is set) ───────────────────
+# mode=max caches ALL intermediate layers (kernel-build, llvm, base, etc.).
+# When only nvgpu OOT sources change, the kernel compile (~40 min) is served
+# from the registry cache and the whole build drops to ~15–20 min.
+CACHE_TAG_NVGPU="nvgpu-${NVGPU_VERSION}-k${KERNEL_VERSION}"
+CACHE_TAG_KERNEL="kernel-${TALOS_VERSION}-k${KERNEL_VERSION}"
+CACHE_FROM_NVGPU=()
+CACHE_TO_NVGPU=()
+CACHE_FROM_KERNEL=()
+CACHE_TO_KERNEL=()
+if [[ -n "${CACHE_REGISTRY}" ]]; then
+  CACHE_FROM_NVGPU=(
+    "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU}"
+    "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL}"
+  )
+  CACHE_TO_NVGPU=(
+    "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU},mode=max"
+  )
+  CACHE_FROM_KERNEL=(
+    "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL}"
+    "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU}"
+  )
+  CACHE_TO_KERNEL=(
+    "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL},mode=max"
+  )
+  info "BuildKit registry cache: ${CACHE_REGISTRY}"
+else
+  info "BuildKit registry cache: disabled (set CACHE_REGISTRY to enable)"
+fi
+
 # ── Step 3: BuildKit build — nvidia-tegra-nvgpu (skip in KERNEL_ONLY mode) ────
 if [[ "${KERNEL_ONLY}" != "1" ]]; then
-  info "Step 2: Building nvidia-tegra-nvgpu (this takes ~60 min)..."
+  info "Step 2: Building nvidia-tegra-nvgpu (cold: ~90 min / cached kernel: ~20 min)..."
   info "    Log: ${BUILD_LOG}"
   mkdir -p "${NVGPU_OUT_DIR}"
 
@@ -81,6 +111,8 @@ if [[ "${KERNEL_ONLY}" != "1" ]]; then
     --file Pkgfile \
     --target nvidia-tegra-nvgpu \
     --platform linux/arm64 \
+    "${CACHE_FROM_NVGPU[@]}" \
+    "${CACHE_TO_NVGPU[@]}" \
     --output "type=local,dest=${NVGPU_OUT_DIR}" \
     . 2>&1 | tee "${BUILD_LOG}"
 
@@ -91,10 +123,12 @@ else
   info "Step 2: Skipped (KERNEL_ONLY=1)"
 fi
 
-# ── Step 4: Build kernel and extract vmlinuz ───────────────────────────────────
-# CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem" guarantees make embeds OUR key.
-# make has NO auto-generate rule for talos_signing_key.pem, so it can never overwrite it.
-info "Step 3: Building kernel + extracting vmlinuz..."
+# ── Step 4: Extract vmlinuz from kernel-build ─────────────────────────────────
+# The nvidia-tegra-nvgpu build above already compiled the kernel internally.
+# With registry cache (mode=max), all kernel layers are already cached —
+# this second buildx call just re-exports the kernel output (~30 sec vs ~40 min).
+# Without cache it rebuilds the kernel again; consider using KERNEL_ONLY=1 to avoid.
+info "Step 3: Extracting vmlinuz from kernel-build (cache hit: ~30 sec)..."
 mkdir -p "${KERNEL_OUT_DIR}"
 
 docker buildx build \
@@ -102,6 +136,8 @@ docker buildx build \
   --file Pkgfile \
   --target kernel-build \
   --platform linux/arm64 \
+  "${CACHE_FROM_KERNEL[@]}" \
+  "${CACHE_TO_KERNEL[@]}" \
   --output "type=local,dest=${KERNEL_OUT_DIR}" \
   . 2>&1 | tee "${BUILD_LOG}.kernel"
 
