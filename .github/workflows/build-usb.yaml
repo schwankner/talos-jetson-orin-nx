@@ -1,17 +1,11 @@
 name: Build USB Image
 
 # Assembles a bootable USB image from extension images already in ghcr.io.
-# Fast (~10 min). Runs on a standard x86_64 runner.
+# Fast (~10 min). Runs on standard ubuntu-latest runner.
 #
-# Prerequisites: extension images must be in ghcr.io/<owner>/:
-#   - nvidia-tegra-nvgpu:<nvgpu_version>-<kernel_version>-talos
-#   - nvidia-firmware-ext:v5
-#   - kernel-modules-clang:<version>-<kernel_version>-talos
-#   - custom-installer:v<talos_version>-<kernel_version>
-#
-# Push extensions once via:
+# Prerequisites: push extension images to ghcr.io/<owner>/ once via:
 #   REGISTRY=ghcr.io/<owner> REGISTRY_DOCKER=ghcr.io/<owner> make build-extensions
-# Or trigger the "Build Extensions (ARM64)" workflow if you have ARM64 runners.
+# Or trigger the "Build Extensions" workflow (requires ARM64 runner).
 
 on:
   push:
@@ -27,10 +21,6 @@ on:
         description: 'nvgpu version override (blank = common.sh default)'
         required: false
         default: ''
-
-concurrency:
-  group: build-usb-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build-usb:
@@ -99,25 +89,16 @@ jobs:
             ## USB boot image — ${{ github.ref_name }}
 
             Bootable USB image for the **Seeed Studio reComputer J4012** (Jetson Orin NX 16 GB).
-            Likely compatible with all Jetson **Orin-series** modules (AGX Orin, Orin NX, Orin Nano).
+            Compatible with Jetson Orin-series modules (Orin NX, Orin Nano, AGX Orin).
 
             ### Flash
 
             ```bash
             # macOS
             sudo dd if=${{ steps.img.outputs.name }} of=/dev/rdiskN bs=4m && sync
-
             # Linux
             sudo dd if=${{ steps.img.outputs.name }} of=/dev/sdX bs=4M status=progress && sync
             ```
 
-            ### Included extensions
-
-            | Extension | Tag |
-            |---|---|
-            | `nvidia-tegra-nvgpu` | `${{ env.NVGPU_VERSION || '5.1.0' }}-6.18.18-talos` |
-            | `nvidia-firmware-ext` | `v5` |
-            | `kernel-modules-clang` | `1.1.0-6.18.18-talos` |
-
-            See [README](https://github.com/${{ github.repository }}#readme) for full setup instructions.
+            See [README](https://github.com/${{ github.repository }}#readme) for full instructions.
           files: ${{ steps.img.outputs.path }}
