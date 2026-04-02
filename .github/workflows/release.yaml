@@ -77,6 +77,15 @@ jobs:
           path: ${{ steps.img.outputs.path }}
           retention-days: 30
 
+      - name: Read versions for release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        id: ver
+        run: |
+          source scripts/common.sh
+          echo "talos=${TALOS_VERSION}"   >> "$GITHUB_OUTPUT"
+          echo "kernel=${KERNEL_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "nvgpu=${NVGPU_VERSION}"   >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release (tag push only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -88,6 +97,12 @@ jobs:
             Bootable for Seeed Studio reComputer J4012 (Jetson Orin NX 16 GB).
             Compatible with all Jetson Orin-series modules.
 
+            | Component | Version |
+            |-----------|---------|
+            | Talos Linux | `${{ steps.ver.outputs.talos }}` |
+            | Linux kernel | `${{ steps.ver.outputs.kernel }}` |
+            | nvidia-tegra-nvgpu | `${{ steps.ver.outputs.nvgpu }}` |
+
             ### Flash
             ```bash
             # macOS
@@ -96,5 +111,5 @@ jobs:
             sudo dd if=${{ steps.img.outputs.name }} of=/dev/sdX bs=4M status=progress && sync
             ```
 
-            See [README](https://github.com/${{ github.repository }}#readme) for instructions.
+            See [README](https://github.com/${{ github.repository }}#readme) for full instructions.
           files: ${{ steps.img.outputs.path }}

@@ -45,7 +45,7 @@ info "    Talos ${TALOS_VERSION}, kernel ${KERNEL_VERSION}"
 #   nvidia-tegra-nvgpu/signing_key.pem        (nvgpu pkg.yaml signs modules with it)
 # CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem" ensures make never auto-overwrites it.
 info "Step 1: Setting up signing keys (serial: $(openssl x509 -in ${REPO_ROOT}/keys/signing_key.x509 -noout -serial 2>/dev/null | cut -d= -f2))..."
-bash "$(dirname "$0")/00-setup-keys.sh"
+bash "$(dirname "$0")/setup-keys.sh"
 
 # ── Step 2: Verify talos-pkgs is set up ──────────────────────────────────────
 [[ -d "${TALOS_PKGS_DIR}/nvidia-tegra-nvgpu" ]] \

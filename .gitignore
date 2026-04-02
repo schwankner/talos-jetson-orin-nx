@@ -47,10 +47,11 @@ __MACOSX/
 .claude/
 
 # ── Day-2 / cluster-ops (kept locally only, not needed for image build) ──────
-manifests/ollama/
-manifests/gpu/cdi-setup.yaml
-manifests/gpu/device-plugin.yaml
-manifests/talos/machine-patch-cdi.yaml
+# manifests/  → not needed for building images; kept locally for cluster-ops
+manifests/
+# profiles/   → generated at build time by build-uki.sh; kept locally for reference
+profiles/
+# day-2 operational scripts (cluster setup, Ollama, CDI, etc.)
 scripts/03-apply-config.sh
 scripts/04-fix-nvme-boot.sh
 scripts/05-bootstrap-cluster.sh

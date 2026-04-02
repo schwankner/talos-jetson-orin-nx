@@ -11,11 +11,10 @@ Run [Talos Linux](https://www.talos.dev/) on the **NVIDIA Jetson Orin NX** with 
 support in Kubernetes pods.
 
 Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html)**
-(Jetson Orin NX 16 GB). Verified result as of Boot 15 (2026-04-01):
+(Jetson Orin NX 16 GB). Verified result as of 2026-04-01:
 
-- GPU inference: **~7–8 tok/s** decode, **~700 tok/s** prefill (qwen2.5:1.5b Q4_K_M, 29/29 layers on GPU, Flash Attention enabled)
+- GPU inference: **~7–8 tok/s** decode, **~700 tok/s** prefill (qwen2.5:1.5b Q4_K_M, 29/29 layers on GPU, on Ollama, Flash Attention enabled)
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
-- NVMe online at **13.7 s**, `module.sig_enforce=1` — **zero module rejections**
 
 > ### ⚠️ CUDA Container Compatibility — Read Before You Start
 >
