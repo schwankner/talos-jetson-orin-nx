@@ -99,3 +99,7 @@ jobs:
         env:
           REGISTRY: ghcr.io/${{ github.repository_owner }}
           REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
+          # BuildKit registry cache (mode=max): caches ALL intermediate layers
+          # (kernel-build, llvm, base) across CI runs. On nvgpu-only changes the
+          # kernel compile (~40 min) is a cache hit → build drops to ~15–20 min.
+          CACHE_REGISTRY: ghcr.io/${{ github.repository_owner }}/build-cache

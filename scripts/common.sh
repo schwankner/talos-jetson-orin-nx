@@ -7,6 +7,12 @@ set -euo pipefail
 REGISTRY="${REGISTRY:-192.168.1.100:5001}"
 REGISTRY_DOCKER="${REGISTRY_DOCKER:-host.docker.internal:5001}"
 
+# ── BuildKit layer cache (pushed to ghcr.io, shared across CI runs) ──────────
+# mode=max caches ALL intermediate layers (kernel-build, llvm, etc.), not just
+# the final image. When only nvgpu changes, the kernel compile is served from
+# cache (~60 min → ~15 min). Override to "" to disable caching.
+CACHE_REGISTRY="${CACHE_REGISTRY:-}"  # set to ghcr.io/<owner>/build-cache in CI
+
 # ── Talos version ────────────────────────────────────────────────────────────
 TALOS_VERSION="${TALOS_VERSION:-v1.12.6}"
 KERNEL_VERSION="${KERNEL_VERSION:-6.18.18}"
