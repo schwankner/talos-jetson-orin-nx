@@ -1,12 +1,5 @@
 name: Build USB Image
 
-# Assembles a bootable USB image from extension images already in ghcr.io.
-# Fast (~10 min). Runs on standard ubuntu-latest runner.
-#
-# Prerequisites: push extension images to ghcr.io/<owner>/ once via:
-#   REGISTRY=ghcr.io/<owner> REGISTRY_DOCKER=ghcr.io/<owner> make build-extensions
-# Or trigger the "Build Extensions" workflow (requires ARM64 runner).
-
 on:
   push:
     tags:
@@ -26,9 +19,6 @@ jobs:
   build-usb:
     name: Assemble UKI + USB image
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: read
 
     steps:
       - name: Checkout
@@ -88,11 +78,10 @@ jobs:
           body: |
             ## USB boot image — ${{ github.ref_name }}
 
-            Bootable USB image for the **Seeed Studio reComputer J4012** (Jetson Orin NX 16 GB).
-            Compatible with Jetson Orin-series modules (Orin NX, Orin Nano, AGX Orin).
+            Bootable for Seeed Studio reComputer J4012 (Jetson Orin NX 16 GB).
+            Compatible with all Jetson Orin-series modules.
 
             ### Flash
-
             ```bash
             # macOS
             sudo dd if=${{ steps.img.outputs.name }} of=/dev/rdiskN bs=4m && sync
@@ -100,5 +89,5 @@ jobs:
             sudo dd if=${{ steps.img.outputs.name }} of=/dev/sdX bs=4M status=progress && sync
             ```
 
-            See [README](https://github.com/${{ github.repository }}#readme) for full instructions.
+            See [README](https://github.com/${{ github.repository }}#readme) for instructions.
           files: ${{ steps.img.outputs.path }}
