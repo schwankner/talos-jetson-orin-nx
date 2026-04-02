@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       talos_version:
+        description: 'Talos version override (blank = use common.sh default)'
         required: false
-        default: ''
       nvgpu_version:
+        description: 'nvgpu version override (blank = use common.sh default)'
         required: false
-        default: ''
 
 jobs:
   build:
