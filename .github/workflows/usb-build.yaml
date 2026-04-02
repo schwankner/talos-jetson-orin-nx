@@ -1,15 +1,66 @@
 name: USB Build
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
+    inputs:
+      talos_version:
+        description: 'Talos version override (blank = common.sh default)'
+        required: false
+        default: ''
+      nvgpu_version:
+        description: 'nvgpu version override (blank = common.sh default)'
+        required: false
+        default: ''
 
 jobs:
-  build:
+  build-usb:
+    name: Assemble UKI + USB image
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
       - uses: docker/setup-buildx-action@v3
-      - run: echo "Docker + QEMU setup succeeded"
+
+      - name: Restore signing keys
+        run: |
+          mkdir -p keys
+          printf '%s' "${{ secrets.SIGNING_KEY_PEM }}"  > keys/signing_key.pem
+          printf '%s' "${{ secrets.SIGNING_KEY_X509 }}" > keys/signing_key.x509
+          chmod 600 keys/signing_key.pem
+
+      - name: Build UKI + USB image
+        run: make usb
+        timeout-minutes: 30
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
+          TALOS_VERSION: ${{ inputs.talos_version || '' }}
+          NVGPU_VERSION: ${{ inputs.nvgpu_version || '' }}
+
+      - name: Locate produced image
+        id: img
+        run: |
+          RAW=$(ls dist/*.raw dist/*.raw.zst 2>/dev/null | head -1)
+          echo "path=${RAW}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "${RAW}")" >> "$GITHUB_OUTPUT"
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: talos-jetson-usb-${{ github.ref_name }}
+          path: ${{ steps.img.outputs.path }}
+          retention-days: 30
