@@ -52,13 +52,13 @@ manifests/
 # profiles/   → generated at build time by build-uki.sh; kept locally for reference
 profiles/
 # day-2 operational scripts (cluster setup, Ollama, CDI, etc.)
-scripts/03-apply-config.sh
-scripts/04-fix-nvme-boot.sh
-scripts/05-bootstrap-cluster.sh
-scripts/06-deploy-ollama.sh
-scripts/07-install-l4t-libs.sh
-scripts/08-test-nvgpu.sh
-scripts/10-setup-cdi.sh
+scripts/apply-config.sh
+scripts/fix-nvme-boot.sh
+scripts/bootstrap-cluster.sh
+scripts/deploy-ollama.sh
+scripts/install-l4t-libs.sh
+scripts/test-nvgpu.sh
+scripts/setup-cdi.sh
 
 # ── Intermediate imager output directories ────────────────────────────────────
 imager-out-v*/

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 09-build-nvgpu.sh — Build nvidia-tegra-nvgpu OCI extension and rebuild custom-installer.
+# build-extensions.sh — Build nvidia-tegra-nvgpu OCI extension and rebuild custom-installer.
 #
 # This script is the SINGLE entry point for building or rebuilding the nvgpu extension.
 # It ensures the signing key is always set BEFORE the BuildKit build runs, so kernel
@@ -7,7 +7,7 @@
 #
 # Key invariant (enforced by CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"):
 #   keys/signing_key.pem  → single source of truth for the signing key
-#   00-setup-keys.sh      → copies it as talos_signing_key.pem to kernel/build/certs/
+#   setup-keys.sh         → copies it as talos_signing_key.pem to kernel/build/certs/
 #                           and as signing_key.pem to nvidia-tegra-nvgpu/
 #   kernel-build          → embeds talos_signing_key.pem (make never auto-regenerates it)
 #   nvidia-tegra-nvgpu    → signs all .ko with signing_key.pem from /pkg/
@@ -15,9 +15,9 @@
 #   → UKI kernel and ALL extension modules ALWAYS share the same signing key
 #
 # Usage:
-#   ./scripts/09-build-nvgpu.sh                       # full build (nvgpu + kernel + installer)
-#   NVGPU_VERSION=5.1.0 ./scripts/09-build-nvgpu.sh
-#   KERNEL_ONLY=1 ./scripts/09-build-nvgpu.sh         # kernel + installer only (skip nvgpu ~60min)
+#   ./scripts/build-extensions.sh                       # full build (nvgpu + kernel + installer)
+#   NVGPU_VERSION=5.1.0 ./scripts/build-extensions.sh
+#   KERNEL_ONLY=1 ./scripts/build-extensions.sh         # kernel + installer only (skip nvgpu ~60min)
 #
 # Outputs:
 #   - Registry: ${REGISTRY}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos
@@ -181,6 +181,6 @@ fi
 # ── Done ────────────────────────────────────────────────────────────────────────
 info ""
 info "=== Build complete ==="
-info "    Run next: ./scripts/01-build-uki.sh"
-info "              ./scripts/02-build-usb-image.sh"
+info "    Run next: ./scripts/build-uki.sh"
+info "              ./scripts/build-usb-image.sh"
 info "              [flash USB, boot, apply-config]"
