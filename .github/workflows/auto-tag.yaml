@@ -1,0 +1,53 @@
+name: Auto-tag on version change
+
+# Triggered when version-controlling files change on main (Renovate automerge).
+# Reads TALOS_VERSION + NVGPU_VERSION from common.sh, creates a git tag
+# v<talos>-nvgpu<nvgpu> → this tag push triggers release.yaml to build the
+# full USB image and create a GitHub Release.
+#
+# Skipped if the tag already exists (idempotent).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/common.sh
+      - nvidia-tegra-nvgpu/pkg.yaml
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    name: Create release tag from version vars
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history for tag check
+
+      - name: Read versions from common.sh
+        id: versions
+        run: |
+          source scripts/common.sh
+          TAG="v${TALOS_VERSION#v}-nvgpu${NVGPU_VERSION}"
+          echo "talos=${TALOS_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "nvgpu=${NVGPU_VERSION}"  >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"              >> "$GITHUB_OUTPUT"
+          echo "Derived tag: ${TAG}"
+
+      - name: Create and push tag (skip if already exists)
+        env:
+          TAG: ${{ steps.versions.outputs.tag }}
+        run: |
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "✓ Tag ${TAG} already exists — nothing to do"
+          else
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name  "github-actions[bot]"
+            git tag "${TAG}"
+            git push origin "${TAG}"
+            echo "✓ Created tag: ${TAG} → release.yaml will now build the USB image"
+          fi

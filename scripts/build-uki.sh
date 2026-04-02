@@ -33,7 +33,7 @@ mkdir -p "${OUT_DIR}"
 # Keys must match what is embedded in the running kernel.
 # See scripts/00-setup-keys.sh for key lifecycle management.
 info "Checking signing keys..."
-bash "$(dirname "$0")/00-setup-keys.sh"
+bash "$(dirname "$0")/setup-keys.sh"
 
 # ── KEY MISMATCH WARNING ───────────────────────────────────────────────────────
 # The UKI kernel comes from custom-installer, but nvgpu modules are signed by
