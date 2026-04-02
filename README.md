@@ -5,7 +5,7 @@
 [![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
 [![nvgpu](https://img.shields.io/badge/nvgpu-5.1.0-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
-[![Build](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/build-usb.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/build-usb.yaml)
+[![Build](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml)
 
 Run [Talos Linux](https://www.talos.dev/) on the **NVIDIA Jetson Orin NX** with full CUDA GPU compute
 support in Kubernetes pods.
@@ -43,21 +43,69 @@ reComputer J4012 which provides NVMe, 2× GbE, and a standard UART TCU connector
 
 ## Table of Contents
 
-1. [Build Prerequisites](#1-build-prerequisites)
-2. [Quick Build & Flash](#2-quick-build--flash)
-3. [GitHub Actions Build (Recommended)](#3-github-actions-build-recommended)
-4. [Build Pipeline Details](#4-build-pipeline-details)
-5. [Component Versions](#5-component-versions)
-6. [GPU Verification](#6-gpu-verification)
-7. [Known Limitations](#7-known-limitations)
-8. [Contributing](#8-contributing)
-9. [References](#9-references)
+1. [Installation](#1-installation)
+2. [Build Prerequisites](#2-build-prerequisites)
+3. [Local Build & Flash](#3-local-build--flash)
+4. [GitHub Actions Pipeline](#4-github-actions-pipeline)
+5. [Build Pipeline Details](#5-build-pipeline-details)
+6. [Component Versions](#6-component-versions)
+7. [GPU Verification](#7-gpu-verification)
+8. [Known Limitations](#8-known-limitations)
+9. [Contributing](#9-contributing)
+10. [References](#10-references)
 
 ---
 
-## 1. Build Prerequisites
+## 1. Installation
 
-### Local Build (macOS)
+No build environment needed. Download the pre-built USB image from the
+[latest release](https://github.com/schwankner/talos-jetson-orin-nx/releases/latest),
+flash it to a USB drive and boot.
+
+### Download
+
+```bash
+# Find the latest release URL
+LATEST=$(curl -s https://api.github.com/repos/schwankner/talos-jetson-orin-nx/releases/latest \
+  | grep browser_download_url | grep '\.raw' | cut -d'"' -f4)
+
+curl -L -O "${LATEST}"
+```
+
+Or go to **[Releases](https://github.com/schwankner/talos-jetson-orin-nx/releases)** and
+download the `.raw` file manually.
+
+### Flash
+
+```bash
+# macOS (replace rdiskN with your USB drive — check: diskutil list)
+sudo dd if=talos-usb-nvgpu5.1.0.raw of=/dev/rdiskN bs=4m && sync
+
+# Linux (replace sdX with your USB drive — check: lsblk)
+sudo dd if=talos-usb-nvgpu5.1.0.raw of=/dev/sdX bs=4M status=progress && sync
+```
+
+> **Tip**: On macOS use `diskutil unmountDisk /dev/diskN` before flashing.
+
+### Boot & Install
+
+1. Plug the USB drive into the Jetson and power on.
+2. Talos boots into **maintenance mode** (no STATE partition found on NVMe).
+3. Apply your machine config:
+   ```bash
+   talosctl apply-config --insecure -n <jetson-ip> --file your-machine-config.yaml
+   ```
+4. Talos installs itself to NVMe, reboots, and comes up fully operational.
+5. Bootstrap the cluster (first boot only):
+   ```bash
+   talosctl bootstrap -n <jetson-ip>
+   ```
+
+---
+
+## 2. Build Prerequisites
+
+### Local Build (macOS — optional)
 
 - **Docker + BuildKit** via [Colima](https://github.com/abiosoft/colima):
   ```bash
@@ -89,7 +137,10 @@ All scripts read from `scripts/common.sh`. Override per-run:
 
 ---
 
-## 2. Quick Build & Flash
+## 3. Local Build & Flash
+
+Only needed if you want to modify the kernel, nvgpu driver, or extensions.
+For most users, the [pre-built release image](#1-installation) is the right choice.
 
 ```bash
 # 1. Generate signing key (once per repo clone / fork)
@@ -108,58 +159,71 @@ sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/rdiskN bs=4m && sync
 # sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
-Then boot the Jetson from USB. Talos enters maintenance mode when no STATE
-partition is found on NVMe. From there, apply your machine config, fix the
-NVMe boot entry, and bootstrap the cluster.
-
-> **Tip**: Use [GitHub Actions](#3-github-actions-build-recommended) — no local
-> arm64 environment needed. Just push a tag and download the release artifact.
-
 ---
 
-## 3. GitHub Actions Build (Recommended)
+## 4. GitHub Actions Pipeline
 
-`.github/workflows/build-usb.yaml` builds the full USB image on GitHub's ARM64
-runners. No Colima, no local Docker, no 90-minute wait.
+Everything runs fully automated on GitHub — no local build environment needed.
 
-**Trigger**:
+### How it works
+
+```
+Tag push (v*) or workflow_dispatch
+         │
+         ▼
+Job 1: Build extensions   (ubuntu-24.04-arm, native ARM64)
+   ├── Cache hit  → ~2 min, skip build ✓
+   └── Cache miss → ~90 min, build kernel + nvgpu + extensions, push to ghcr.io
+         │
+         ▼  (needs: build-extensions)
+Job 2: Build USB image    (ubuntu-24.04-arm, native ARM64)
+   └── make usb → .raw → uploaded as artifact + GitHub Release
+```
+
+Both jobs run on **native ARM64** (`ubuntu-24.04-arm`) — no QEMU, no cross-compilation.
+
+### Trigger a release
+
 ```bash
 git tag v1.12.6-nvgpu5.1.0
 git push --tags
-# → GitHub builds the image and creates a release with the .raw file attached
+# → pipeline builds the image and creates a release with the .raw attached
 ```
 
-Or run manually: **Actions → Build USB Image → Run workflow**
+Or trigger manually: **Actions → Build USB Image → Run workflow**
 
-**Required GitHub Secrets** (set once under *Settings → Secrets → Actions*):
+### Updating component versions
+
+Change `NVGPU_VERSION`, `KERNEL_VERSION`, or `TALOS_VERSION` in `scripts/common.sh`,
+commit, and push a tag. The pipeline detects that the new image tag does not yet
+exist in `ghcr.io` and rebuilds everything automatically (~90 min).
+
+### Required GitHub Secrets
+
+Set once under *Settings → Secrets → Actions*:
 
 | Secret | Value |
 |---|---|
 | `SIGNING_KEY_PEM` | Content of `keys/signing_key.pem` |
-| `SIGNING_KEY_X509` | Content of `keys/signing_key.x509` |
+| `SIGNING_KEY_X509` | Content of `keys/signing_key.x509` (PEM format) |
 
-**Two separate workflows**:
-- **`build-extensions.yaml`**: builds kernel + GPU driver extensions (~90 min first run),
-  pushes to `ghcr.io`. Runs on `ubuntu-latest` with QEMU arm64 cross-compilation —
-  no special runners needed. Auto-skips if extension images are already cached.
-  Can also be pre-populated locally:
-  ```bash
-  REGISTRY=ghcr.io/<you> REGISTRY_DOCKER=ghcr.io/<you> make build-extensions
-  ```
-- **`build-usb.yaml`**: assembles UKI + USB image from cached ghcr.io images (~10 min).
-  Runs on `ubuntu-latest`. Trigger this after extensions are cached — or on tag push.
+### Workflows
+
+| Workflow | Trigger | Runtime |
+|---|---|---|
+| `release.yaml` | Tag push `v*` or manual | ~5 min (cached) / ~120 min (cold) |
+| `build-extensions.yaml` | Manual or called by release.yaml | ~2 min (cached) / ~90 min (cold) |
 
 **Daily Talos check**: `.github/workflows/check-talos.yaml` runs every morning
 and opens a GitHub issue automatically when a new Talos release is available,
 with step-by-step upgrade instructions.
 
 **Renovate**: `renovate.json` tracks Talos and kernel versions and opens PRs
-when updates are available. GitHub Actions workflow updates are auto-merged
-for patch versions.
+when updates are available.
 
 ---
 
-## 4. Build Pipeline Details
+## 5. Build Pipeline Details
 
 ### Architecture
 
@@ -241,7 +305,7 @@ devfreq governor, CDI / containerd 2.x, UBSAN netlist bug) is documented in
 
 ---
 
-## 5. Component Versions
+## 6. Component Versions
 
 | Component | Version | Notes |
 |---|---|---|
@@ -257,7 +321,7 @@ devfreq governor, CDI / containerd 2.x, UBSAN netlist bug) is documented in
 
 ---
 
-## 6. GPU Verification
+## 7. GPU Verification
 
 ### Check module loaded + devfreq governor active
 
@@ -291,7 +355,7 @@ GPU 0: Orin  SM 8.7  15.3 GiB
 
 ---
 
-## 7. Known Limitations
+## 8. Known Limitations
 
 | Limitation | Impact | Notes |
 |---|---|---|
@@ -305,7 +369,7 @@ GPU 0: Orin  SM 8.7  15.3 GiB
 
 ---
 
-## 8. Contributing
+## 9. Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 
@@ -317,7 +381,7 @@ Contributions especially welcome for:
 
 ---
 
-## 9. References
+## 10. References
 
 - [Talos Linux v1.12 Documentation](https://www.talos.dev/v1.12/)
 - [Talos System Extensions Guide](https://www.talos.dev/v1.12/talos-guides/configuration/system-extensions/)
