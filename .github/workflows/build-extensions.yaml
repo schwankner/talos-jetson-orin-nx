@@ -48,11 +48,11 @@ jobs:
             echo "Will build: ${IMAGE}"
           fi
 
-      - name: Set up Docker Buildx
+      - name: Set up Docker Buildx (named talos-builder for script compatibility)
         if: steps.check_cache.outputs.skip != 'true'
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
+        run: |
+          docker buildx create --name talos-builder --driver docker-container --use
+          docker buildx inspect talos-builder --bootstrap
 
       - name: Restore signing keys
         if: steps.check_cache.outputs.skip != 'true'
