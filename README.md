@@ -1,4 +1,4 @@
-# Talos Linux on NVIDIA Jetson Orin NX — GPU Compute / CUDA
+# Talos Linux on NVIDIA Jetson Orin — GPU Compute / CUDA
 
 [![Talos](https://img.shields.io/badge/Talos-v1.12.6-blue)](https://github.com/siderolabs/talos/releases/tag/v1.12.6)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35.0-blue)](https://kubernetes.io/)
@@ -7,8 +7,9 @@
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 [![Build](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml)
 
-Run [Talos Linux](https://www.talos.dev/) on the **NVIDIA Jetson Orin NX** with full CUDA GPU compute
-support in Kubernetes pods.
+Run [Talos Linux](https://www.talos.dev/) on any **NVIDIA Jetson Orin** module with full CUDA GPU
+compute support in Kubernetes pods. One USB image boots the entire Orin family (AGX Orin,
+Orin NX, Orin Nano) — all share the same T234 SoC, GA10B GPU, and UEFI boot path.
 
 Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html)**
 (Jetson Orin NX 16 GB). Verified result as of 2026-04-01:
@@ -45,18 +46,28 @@ Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstu
 
 This image targets the **NVIDIA GA10B GPU (Ampere, SM 8.7)** found in all Jetson Orin-series modules.
 
-| Module | Supported | Notes |
-|---|---|---|
-| **Jetson Orin NX 16 GB** | ✅ Tested | Developed on this module (reComputer J4012) |
-| **Jetson Orin NX 8 GB** | ⚠️ Likely works | Same GA10B GPU, less VRAM — untested |
-| **Jetson Orin Nano 8 GB** | ⚠️ Likely works | Same GA10B GPU, lower TDP — untested |
-| **Jetson Orin Nano 4 GB** | ⚠️ Likely works | Same GA10B GPU — untested |
-| **Jetson AGX Orin** | ⚠️ Likely works | Same GA10B GPU, different SKU/firmware — untested |
-| **Jetson AGX Xavier / Xavier NX** | ❌ Not compatible | Different GPU architecture (Volta/GV11B, SM 7.2) |
-| **Jetson TX2** | ❌ Not compatible | Pascal GPU, different OOT driver tree |
+All Orin boards share the same T234 SoC and boot via UEFI (EDK2 firmware in SPI flash). The
+Device Tree is loaded from the board's own SPI flash — no board-specific image variant is
+needed. **One USB image works for the entire Orin family.**
 
-> Tried it on a different Orin module? **Open an issue** with your UART boot log — we'd love to
-> document it and expand the compatibility matrix.
+| Module | Status | Notes |
+|--------|--------|-------|
+| **Jetson Orin NX 16 GB** | ✅ Tested | Developed on this module (reComputer J4012) |
+| **Jetson Orin NX 8 GB** | ✅ Compatible | Same T234/GA10B, reduced LPDDR5 |
+| **Jetson Orin Nano 8 GB** | ✅ Compatible | Same T234/GA10B, lower TDP (15 W) |
+| **Jetson Orin Nano 4 GB** | ✅ Compatible | Same T234/GA10B, fewer CPU cores active |
+| **Jetson AGX Orin 32/64 GB** | ✅ Compatible | Same T234/GA10B, more CPU/GPU/DLA enabled |
+| **Jetson AGX Xavier / Xavier NX** | ❌ Not compatible | Different GPU: Volta GV11B (SM 7.2), requires separate nvgpu branch |
+| **Jetson TX2** | ❌ Not compatible | Pascal GP10B GPU, different OOT driver tree entirely |
+| **Jetson Nano (classic)** | ❌ Not compatible | Maxwell GPU, no UEFI boot |
+
+> **Why one image?** Jetson Orin uses EDK2 UEFI firmware (stored in SPI flash) for boot. The
+> board-specific Device Tree Blob is supplied by the UEFI firmware from the board's own SPI flash,
+> not from the USB image. Our UKI is a standard `platform: metal` UEFI image with no board overlay —
+> identical to how Talos boots on x86 servers.
+
+> Tried it on a specific Orin module? **Open an issue** with your UART boot log — we'd love to
+> confirm compatibility and update this table.
 
 **Carrier board**: Any carrier with UEFI boot support should work. Tested on the
 reComputer J4012 which provides NVMe, 2× GbE, and a standard UART TCU connector.

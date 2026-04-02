@@ -90,12 +90,24 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: "Talos Jetson Orin NX — ${{ github.ref_name }}"
+          name: "Talos Jetson Orin — ${{ github.ref_name }}"
           body: |
             ## USB boot image — ${{ github.ref_name }}
 
-            Bootable for Seeed Studio reComputer J4012 (Jetson Orin NX 16 GB).
-            Compatible with all Jetson Orin-series modules.
+            **One image for the entire Jetson Orin family.**
+
+            All Orin modules use the same T234 SoC with GA10B GPU and boot via UEFI (EDK2 in SPI
+            flash). The DTB is loaded from the board's own SPI flash — no board-specific build
+            needed. Flash this image to a USB stick and boot any Orin module.
+
+            | Module | Status |
+            |--------|--------|
+            | Jetson Orin NX 16 GB (reComputer J4012) | ✅ Tested |
+            | Jetson Orin NX 8 GB | ✅ Compatible (same SoC/GPU) |
+            | Jetson Orin Nano 8 GB | ✅ Compatible (same SoC/GPU) |
+            | Jetson Orin Nano 4 GB | ✅ Compatible (same SoC/GPU) |
+            | Jetson AGX Orin (all SKUs) | ✅ Compatible (same SoC/GPU) |
+            | Xavier / TX2 / Nano (classic) | ❌ Different GPU architecture |
 
             | Component | Version |
             |-----------|---------|
@@ -105,11 +117,11 @@ jobs:
 
             ### Flash
             ```bash
-            # macOS
+            # macOS (replace N with disk number from: diskutil list)
             sudo dd if=${{ steps.img.outputs.name }} of=/dev/rdiskN bs=4m && sync
-            # Linux
+            # Linux (replace X with your USB drive from: lsblk)
             sudo dd if=${{ steps.img.outputs.name }} of=/dev/sdX bs=4M status=progress && sync
             ```
 
-            See [README](https://github.com/${{ github.repository }}#readme) for full instructions.
+            See [README](https://github.com/${{ github.repository }}#readme) for full setup instructions.
           files: ${{ steps.img.outputs.path }}
