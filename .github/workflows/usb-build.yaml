@@ -1,9 +1,6 @@
 name: USB Build
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       talos_version:
