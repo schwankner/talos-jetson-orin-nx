@@ -2,37 +2,23 @@ name: Build Extensions
 
 # Builds kernel + GPU driver extensions and pushes to ghcr.io.
 # Run this ONCE after updating Talos, kernel, or nvgpu versions.
-# Subsequent runs auto-skip if extension images are already cached in ghcr.io.
+# Subsequent usb-build runs auto-skip if extension images are already cached in ghcr.io.
 #
 # Runtime: ~90 min (cold cache), ~5 min (cache hit).
 # After this completes, trigger "Build USB Image" to produce the .raw file.
 #
-# For public repositories: GitHub Actions minutes are free (no monthly limit).
+# Uses ubuntu-24.04-arm (standard ARM64 runner — free for public repos).
+# To force a rebuild when images are already cached: delete the existing
+# ghcr.io image tags manually, then re-trigger this workflow.
 
 on:
   workflow_dispatch:
-    inputs:
-      talos_version:
-        description: 'Talos version override (blank = common.sh default)'
-        required: false
-        default: ''
-      nvgpu_version:
-        description: 'nvgpu version override (blank = common.sh default)'
-        required: false
-        default: ''
-      force_rebuild:
-        description: 'Force rebuild even if images already in ghcr.io (true/false)'
-        required: false
-        default: 'false'
-      runner:
-        description: 'Runner label (ubuntu-24.04-arm / ubuntu-22.04-arm / ubuntu-latest)'
-        required: false
-        default: 'ubuntu-24.04-arm'
 
 jobs:
   build-extensions:
     name: Build extensions
-    runs-on: ${{ inputs.runner || 'ubuntu-24.04-arm' }}
+    runs-on: ubuntu-24.04-arm
+
     permissions:
       contents: read
       packages: write
@@ -52,11 +38,8 @@ jobs:
         id: check_cache
         run: |
           source scripts/common.sh
-          NVGPU="${NVGPU_VERSION:-5.1.0}"
-          KERNEL="${KERNEL_VERSION:-6.18.18}"
-          IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU}-${KERNEL}-talos"
-          if [[ "${{ inputs.force_rebuild }}" != "true" ]] && \
-             docker manifest inspect "${IMAGE}" >/dev/null 2>&1; then
+          IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos"
+          if docker manifest inspect "${IMAGE}" >/dev/null 2>&1; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "✓ ${IMAGE} already in ghcr.io — skipping build"
           else
@@ -96,5 +79,3 @@ jobs:
         env:
           REGISTRY: ghcr.io/${{ github.repository_owner }}
           REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
-          TALOS_VERSION: ${{ inputs.talos_version || '' }}
-          NVGPU_VERSION: ${{ inputs.nvgpu_version || '' }}
