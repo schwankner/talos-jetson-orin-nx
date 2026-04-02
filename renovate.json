@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Talos Linux on Jetson Orin NX — dependency update config",
+  "description": "Talos Linux on Jetson Orin NX — dependency update config.\n\nWhen Renovate opens a PR, CI runs (shellcheck + YAML validate).\nAfter CI passes, Renovate automerges to main.\nauto-tag.yaml then creates a versioned tag → release.yaml builds the full USB image.",
   "extends": [
     "config:base",
     ":dependencyDashboard"
@@ -8,40 +8,34 @@
   "labels": ["dependencies"],
   "assignees": ["schwankner"],
   "reviewers": ["schwankner"],
+  "schedule": ["at any time"],
+  "prCreation": "not-pending",
+  "prHourlyLimit": 3,
+  "prConcurrentLimit": 5,
+  "automerge": true,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
   "packageRules": [
     {
-      "description": "Talos Linux version — requires full rebuild",
-      "matchManagers": ["regex"],
-      "matchFileNames": ["scripts/common.sh"],
-      "matchDepNames": ["talos"],
-      "commitMessageTopic": "Talos Linux",
-      "commitMessageExtra": "(full rebuild required)",
-      "labels": ["dependencies", "breaking-change"]
-    },
-    {
-      "description": "Group all Talos-related updates",
+      "description": "Group all Talos stack updates (Talos + kernel + pkgs branch + LLVM)",
       "matchManagers": ["regex"],
       "matchFileNames": ["scripts/common.sh"],
       "groupName": "Talos stack",
-      "groupSlug": "talos-stack"
+      "groupSlug": "talos-stack",
+      "labels": ["dependencies", "talos-update"],
+      "automerge": true,
+      "commitMessageTopic": "Talos stack"
     },
     {
-      "description": "Docker base images in Dockerfiles",
-      "matchManagers": ["dockerfile"],
-      "automerge": false
-    },
-    {
-      "description": "GitHub Actions — automerge patch versions",
+      "description": "GitHub Actions — automerge all updates (pinned SHA digests preferred)",
       "matchManagers": ["github-actions"],
       "automerge": true,
-      "automergeType": "pr",
-      "matchUpdateTypes": ["patch"]
+      "automergeType": "pr"
     },
     {
-      "description": "GitHub Actions — require manual review for major/minor",
-      "matchManagers": ["github-actions"],
-      "automerge": false,
-      "matchUpdateTypes": ["major", "minor"]
+      "description": "Docker base images in Dockerfiles — require manual review",
+      "matchManagers": ["dockerfile"],
+      "automerge": false
     }
   ],
   "regexManagers": [
@@ -56,7 +50,7 @@
       "extractVersionTemplate": "^v?(?<version>.*)$"
     },
     {
-      "description": "Kernel version in common.sh",
+      "description": "Kernel version in common.sh (tracks torvalds/linux tags)",
       "fileMatch": ["^scripts/common\\.sh$"],
       "matchStrings": [
         "KERNEL_VERSION=\"\\$\\{KERNEL_VERSION:-(?<currentValue>[^}\"]+)\\}\""
@@ -67,7 +61,16 @@
       "versioningTemplate": "semver-coerced"
     },
     {
-      "description": "Talos version in GitHub Actions workflows",
+      "description": "LLVM toolchain version for nvidia-tegra-nvgpu build",
+      "fileMatch": ["^scripts/common\\.sh$"],
+      "matchStrings": [
+        "LLVM_REV=\"\\$\\{LLVM_REV:-(?<currentValue>[^}\"]+)\\}\""
+      ],
+      "depNameTemplate": "siderolabs/llvm",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "Talos version referenced in GitHub Actions workflows",
       "fileMatch": ["^\\.github/workflows/.+\\.ya?ml$"],
       "matchStrings": [
         "TALOS_VERSION: '(?<currentValue>[^']+)'"
@@ -75,14 +78,5 @@
       "depNameTemplate": "siderolabs/talos",
       "datasourceTemplate": "github-releases"
     }
-  ],
-  "ignoreDeps": [
-    "nvidia-tegra-nvgpu",
-    "nvidia-firmware-ext",
-    "kernel-modules-clang"
-  ],
-  "schedule": ["every weekend"],
-  "prCreation": "not-pending",
-  "prHourlyLimit": 2,
-  "prConcurrentLimit": 5
+  ]
 }

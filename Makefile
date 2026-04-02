@@ -15,23 +15,23 @@ all: uki usb
 
 # ── Signing key (generate once, committed to repo) ───────────────────────────
 keys:
-	./scripts/00-setup-keys.sh
+	./scripts/setup-keys.sh
 
 # ── Build system extensions + kernel (full rebuild, ~60–90 min) ──────────────
 build-extensions:
-	./scripts/09-build-nvgpu.sh
+	./scripts/build-extensions.sh
 
 # ── Rebuild kernel only (skip nvgpu ~60 min) ────────────────────────────────
 build-kernel:
-	KERNEL_ONLY=1 ./scripts/09-build-nvgpu.sh
+	KERNEL_ONLY=1 ./scripts/build-extensions.sh
 
 # ── Assemble UKI from registry images ────────────────────────────────────────
 uki:
-	./scripts/01-build-uki.sh
+	./scripts/build-uki.sh
 
 # ── Create bootable USB disk image ──────────────────────────────────────────
 usb: uki
-	./scripts/02-build-usb-image.sh
+	./scripts/build-usb-image.sh
 
 # ── Clean build outputs (not committed anyway) ───────────────────────────────
 clean:
