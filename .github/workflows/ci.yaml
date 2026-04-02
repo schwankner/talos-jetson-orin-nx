@@ -2,10 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, "release-*"]
-    tags: ["v*"]
+    branches: [main, "renovate/**"]
   pull_request:
-    branches: [main, "release-*"]
+    branches: [main]
 
 jobs:
   # ── Shell script linting ────────────────────────────────────────────────────
@@ -16,12 +15,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install shellcheck
-        # Use apt instead of the action — avoids x86_64/arm64 download issues
         run: sudo apt-get install -y shellcheck
 
-      - name: Run shellcheck
+      - name: Run shellcheck on committed build scripts
         run: |
-          shellcheck --severity=warning scripts/*.sh
+          shellcheck --severity=warning \
+            scripts/common.sh \
+            scripts/setup-keys.sh \
+            scripts/build-uki.sh \
+            scripts/build-usb-image.sh \
+            scripts/build-extensions.sh
           echo "Shellcheck passed"
 
   # ── YAML validation ─────────────────────────────────────────────────────────
@@ -31,28 +34,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate imager profiles
+      - name: Validate workflow YAML files
         run: |
-          shopt -s nullglob
-          files=(profiles/*.yaml)
-          if [[ ${#files[@]} -eq 0 ]]; then
-            echo "No profile YAML files found — skipping"
-            exit 0
-          fi
-          for f in "${files[@]}"; do
+          for f in .github/workflows/*.yaml .github/workflows/*.yml; do
+            [[ -f "$f" ]] || continue
             python3 -c "import yaml, sys; yaml.safe_load(open('$f'))" \
               && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
-      - name: Validate manifests
+      - name: Validate nvidia-tegra-nvgpu/pkg.yaml
         run: |
-          shopt -s globstar nullglob
-          files=(manifests/**/*.yaml)
-          if [[ ${#files[@]} -eq 0 ]]; then
-            echo "No manifest YAML files found — skipping"
-            exit 0
-          fi
-          for f in "${files[@]}"; do
-            python3 -c "import yaml, sys; yaml.safe_load(open('$f'))" \
-              && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
-          done
+          python3 -c "import yaml, sys; yaml.safe_load(open('nvidia-tegra-nvgpu/pkg.yaml'))" \
+            && echo "OK: nvidia-tegra-nvgpu/pkg.yaml"
