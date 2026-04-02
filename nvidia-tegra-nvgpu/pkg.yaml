@@ -179,24 +179,9 @@ steps:
         # flags BEFORE passing any argument to the real clang binary. This is
         # source-independent — it works regardless of which Makefile adds the flag
         # or via which Kconfig variable it is expressed.
-        cat > /usr/local/bin/clang-oot << 'CLANGWRAP'
-#!/bin/bash
-# Clang wrapper: strips GCC 15-specific flags rejected by Clang 22+ for OOT builds.
-# -fmin-function-alignment=N  : GCC 14+ only, no Clang equivalent
-# -fconserve-stack            : GCC-only stack optimization
-# -fsanitize=bounds-strict    : GCC UBSAN variant; Clang uses plain -fsanitize=bounds
-filtered=()
-for arg in "$@"; do
-  case "$arg" in
-    -fmin-function-alignment=*|-fconserve-stack) ;;
-    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;
-    *) filtered+=("$arg") ;;
-  esac
-done
-exec clang "${filtered[@]}"
-CLANGWRAP
+        printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}"\n' > /usr/local/bin/clang-oot
         chmod +x /usr/local/bin/clang-oot
-        echo "clang-oot wrapper installed at /usr/local/bin/clang-oot"
+        echo "clang-oot wrapper installed"
 
         NVIDIA_OOT=/oot-src/nvidia-oot
         NVIDIA_CONFTEST=/oot-src/out/nvidia-conftest
@@ -308,18 +293,7 @@ CLANGWRAP
         # The wrapper was created in the previous build step, but Docker BuildKit
         # may have served a cached nvidia-linux-header layer that predates it.
         # Re-create it here unconditionally to be safe.
-        cat > /usr/local/bin/clang-oot << 'CLANGWRAP'
-#!/bin/bash
-filtered=()
-for arg in "$@"; do
-  case "$arg" in
-    -fmin-function-alignment=*|-fconserve-stack) ;;
-    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;
-    *) filtered+=("$arg") ;;
-  esac
-done
-exec clang "${filtered[@]}"
-CLANGWRAP
+        printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}"\n' > /usr/local/bin/clang-oot
         chmod +x /usr/local/bin/clang-oot
         # ── nvgpu source patches ─────────────────────────────────────────────────────
         # Kernel 6.18 compat: always use vm_flags_set (conftest fails in 6.12+)
