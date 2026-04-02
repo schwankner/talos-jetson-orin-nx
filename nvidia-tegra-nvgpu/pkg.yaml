@@ -169,25 +169,34 @@ steps:
           | xargs -r sed -i "s|#if defined(NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)|#if 1 /* force: kernel 6.11+ */|g"
         echo "Patched nvmap: forced conftest macro code paths for kernel 6.18"
       - |
-        # ── Cross-compiler mismatch fix (GCC 15 kernel + Clang 22 modules) ────────
-        # siderolabs/pkgs builds the Talos kernel with GCC 15.2, which sets
-        # CONFIG_CC_IS_GCC=y in include/config/auto.conf. Every subsequent
-        # `make -C /src LLVM=1 M=...` re-reads auto.conf, causing all
-        # `ifdef CONFIG_CC_IS_GCC` blocks in kernel Makefiles to fire, adding
-        # GCC-only flags that Clang 22+ rejects as hard errors:
-        #   -fmin-function-alignment=$(CONFIG_FUNCTION_ALIGNMENT)  → expands to 8
-        #   -fconserve-stack
-        #   -fsanitize=bounds-strict  (in scripts/Makefile.ubsan)
+        # ── Cross-compiler mismatch fix: Clang wrapper (definitive) ─────────────
+        # Previous attempts (patching auto.conf, CONFIG_CC_IS_GCC= on make cmdline)
+        # failed because -fmin-function-alignment=8 comes from CONFIG_FUNCTION_ALIGNMENT
+        # in auto.conf via an unconditional $(if ...) expression — NOT guarded by
+        # CONFIG_CC_IS_GCC. The bounds-strict flag similarly may come from UBSAN config.
         #
-        # Root fix: clear CONFIG_CC_IS_GCC in auto.conf so all ifdef blocks are
-        # skipped when Clang is the compiler for OOT module builds.
-        # Also clear autoconf.h which guards the same flag at C level.
-        echo "Clearing CONFIG_CC_IS_GCC from kernel auto.conf (GCC 15 + Clang 22 mismatch fix)"
-        sed -i 's/^CONFIG_CC_IS_GCC=y$/# CONFIG_CC_IS_GCC is not set/' \
-          /src/include/config/auto.conf
-        sed -i 's/#define CONFIG_CC_IS_GCC 1/\/* CONFIG_CC_IS_GCC not set *\//' \
-          /src/include/generated/autoconf.h 2>/dev/null || true
-        echo "CONFIG_CC_IS_GCC cleared — GCC-only KBUILD flags will not be added for OOT builds"
+        # Definitive fix: wrap clang in a shell script that strips the known GCC-only
+        # flags BEFORE passing any argument to the real clang binary. This is
+        # source-independent — it works regardless of which Makefile adds the flag
+        # or via which Kconfig variable it is expressed.
+        cat > /usr/local/bin/clang-oot << 'CLANGWRAP'
+#!/bin/bash
+# Clang wrapper: strips GCC 15-specific flags rejected by Clang 22+ for OOT builds.
+# -fmin-function-alignment=N  : GCC 14+ only, no Clang equivalent
+# -fconserve-stack            : GCC-only stack optimization
+# -fsanitize=bounds-strict    : GCC UBSAN variant; Clang uses plain -fsanitize=bounds
+filtered=()
+for arg in "$@"; do
+  case "$arg" in
+    -fmin-function-alignment=*|-fconserve-stack) ;;
+    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;
+    *) filtered+=("$arg") ;;
+  esac
+done
+exec clang "${filtered[@]}"
+CLANGWRAP
+        chmod +x /usr/local/bin/clang-oot
+        echo "clang-oot wrapper installed at /usr/local/bin/clang-oot"
 
         NVIDIA_OOT=/oot-src/nvidia-oot
         NVIDIA_CONFTEST=/oot-src/out/nvidia-conftest
@@ -199,7 +208,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/gpu/host1x \
-          CONFIG_CC_IS_GCC= \
+          CC=/usr/local/bin/clang-oot \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -214,7 +223,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/platform/tegra/mc-utils \
-          CONFIG_CC_IS_GCC= \
+          CC=/usr/local/bin/clang-oot \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -240,7 +249,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/gpu/host1x-fence \
-          CONFIG_CC_IS_GCC= \
+          CC=/usr/local/bin/clang-oot \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -255,7 +264,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/video/tegra/nvmap \
-          CONFIG_CC_IS_GCC= \
+          CC=/usr/local/bin/clang-oot \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -274,7 +283,7 @@ steps:
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=${NVIDIA_OOT}/drivers/devfreq \
-          CONFIG_CC_IS_GCC= \
+          CC=/usr/local/bin/clang-oot \
           CONFIG_TEGRA_OOT_MODULE=m \
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
@@ -295,27 +304,25 @@ steps:
           > /oot-src/out/nvidia-linux-header/Module.symvers
       - |
         echo "Building nvgpu module (OE4T patches-r36.5)..."
-        # ── GCC 15 / Clang 22 cross-compiler mismatch fix (inline, cache-safe) ──────
-        # Docker BuildKit may serve a cached nvidia-linux-header layer from before the
-        # separate patch step existed, so that patch is not guaranteed to be visible
-        # here. Fix it unconditionally, inline, immediately before the make call.
-        #
-        # The kernel was built by GCC 15, so auto.conf contains CONFIG_CC_IS_GCC=y.
-        # Every `make -C /src LLVM=1 M=...` re-reads auto.conf, triggering all
-        # `ifdef CONFIG_CC_IS_GCC` blocks and injecting GCC-only flags:
-        #   -fmin-function-alignment=$(CONFIG_FUNCTION_ALIGNMENT)  → expands to 8
-        #   -fconserve-stack           (GCC-only)
-        #   -fsanitize=bounds-strict   (scripts/Makefile.ubsan, GCC UBSAN variant)
-        # Clang 22 rejects all three as hard errors.
-        #
-        # Fix A – file level: clear CONFIG_CC_IS_GCC in auto.conf
-        sed -i 's/^CONFIG_CC_IS_GCC=y$/# CONFIG_CC_IS_GCC is not set/' \
-          /src/include/config/auto.conf
-        sed -i 's/#define CONFIG_CC_IS_GCC 1/\/* CONFIG_CC_IS_GCC not set *\//' \
-          /src/include/generated/autoconf.h 2>/dev/null || true
-        echo "CONFIG_CC_IS_GCC cleared in auto.conf"
+        # ── Ensure clang-oot wrapper is present (cache-safe: create inline) ────────
+        # The wrapper was created in the previous build step, but Docker BuildKit
+        # may have served a cached nvidia-linux-header layer that predates it.
+        # Re-create it here unconditionally to be safe.
+        cat > /usr/local/bin/clang-oot << 'CLANGWRAP'
+#!/bin/bash
+filtered=()
+for arg in "$@"; do
+  case "$arg" in
+    -fmin-function-alignment=*|-fconserve-stack) ;;
+    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;
+    *) filtered+=("$arg") ;;
+  esac
+done
+exec clang "${filtered[@]}"
+CLANGWRAP
+        chmod +x /usr/local/bin/clang-oot
         # ── nvgpu source patches ─────────────────────────────────────────────────────
-        # Kernel 6.18 compat: patch ALL nvgpu .c files that use NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS
+        # Kernel 6.18 compat: always use vm_flags_set (conftest fails in 6.12+)
         grep -rl "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" /oot-src/nvgpu/drivers/gpu/nvgpu/ \
           | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if 1 /* force: kernel 6.3+ */|g"
         echo "Patched all nvgpu files: always use vm_flags_set on kernel 6.3+"
@@ -332,12 +339,10 @@ steps:
         awk '/nvgpu_nvhost_syncpt_init\(platform->g\)/{print "#ifdef CONFIG_TEGRA_GK20A_NVHOST"; in_syncpt=1} {print} in_syncpt && /^\t\}$/{print "#endif /* CONFIG_TEGRA_GK20A_NVHOST */"; in_syncpt=0}' "$GA10B" > "$GA10B.tmp" && mv "$GA10B.tmp" "$GA10B"
         echo "Patched platform_ga10b_tegra.c: nvgpu_nvhost_syncpt_init guard added"
         echo "platform_ga10b_tegra.c: devfreq governor kept as nvhost_podgov"
-        # Fix B – make level: pass CONFIG_CC_IS_GCC= on the command line so GNU make
-        # treats it as empty (undefined for ifdef) even if auto.conf is re-read.
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=/oot-src/nvgpu/drivers/gpu/nvgpu \
-          CONFIG_CC_IS_GCC= \
+          CC=/usr/local/bin/clang-oot \
           CONFIG_TEGRA_OOT_MODULE=m \
           CONFIG_GK20A=m \
           CONFIG_TEGRA_GK20A_NVHOST=n \
