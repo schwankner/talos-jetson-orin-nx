@@ -17,6 +17,29 @@ Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstu
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
 - NVMe online at **13.7 s**, `module.sig_enforce=1` — **zero module rejections**
 
+> ### ⚠️ CUDA Container Compatibility — Read Before You Start
+>
+> **Not all CUDA images work on Jetson — this is a hardware limitation, not specific to this project.**
+>
+> The Jetson Orin NX uses NVIDIA's **Tegra SoC GPU** (integrated, not discrete). It exposes
+> `/dev/nvhost-*` and `/dev/nvgpu` devices instead of the standard `/dev/nvidia*` found on
+> desktop/server GPUs. As a result, generic CUDA container images compiled for SBSA
+> (Server Base System Architecture) will **not** work — they link against libraries and device
+> paths that simply do not exist on Tegra.
+>
+> **This is identical behaviour to the official NVIDIA JetPack/L4T Ubuntu image**, which has
+> the same restriction. No Jetson setup — official or custom — can run arbitrary CUDA images.
+>
+> **What works ✅**
+> - `ollama/ollama:jetson` — bundles its own Tegra-compatible CUDA runtime
+> - `nvcr.io/nvidia/l4t-cuda:*` — NVIDIA's official L4T CUDA base images
+> - [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers) — community Jetson image collection (PyTorch, TensorRT, etc.)
+> - Any image built `FROM nvcr.io/nvidia/l4t-*` or explicitly targeting Tegra/L4T
+>
+> **What does not work ❌**
+> - `nvcr.io/nvidia/cuda:12.x-*-ubuntu22.04` (generic arm64 — targets SBSA, not Tegra)
+> - Any image that assumes `/dev/nvidia0` or standard NVIDIA desktop GPU device paths
+
 ---
 
 ## Hardware Compatibility
