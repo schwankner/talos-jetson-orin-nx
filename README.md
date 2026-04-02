@@ -87,19 +87,32 @@ sudo dd if=talos-usb-nvgpu5.1.0.raw of=/dev/sdX bs=4M status=progress && sync
 
 > **Tip**: On macOS use `diskutil unmountDisk /dev/diskN` before flashing.
 
+### Prerequisites
+
+> ⚠️ **JetPack 6.2 (L4T r36.5) must be flashed to the Jetson before booting this image.**
+>
+> The GPU firmware files (`pmu_pkc_prod_sig.bin` and friends) are sourced from JetPack r36.5.
+> Older JetPack versions (6.1 / r36.4 or earlier) will cause the nvgpu driver to fail at firmware load.
+>
+> Flash JetPack 6.2 using [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager) **before** proceeding.
+
 ### Boot & Install
 
-1. Plug the USB drive into the Jetson and power on.
-2. Talos boots into **maintenance mode** (no STATE partition found on NVMe).
-3. Apply your machine config:
+1. Plug the USB drive into the Jetson.
+2. Enter the **UEFI boot menu** (press **Escape** during POST / on the UART splash screen).
+3. Select **Boot Manager → USB drive** and confirm.
+4. Talos boots into **maintenance mode** (no STATE partition found on NVMe yet).
+5. Apply your machine config:
    ```bash
    talosctl apply-config --insecure -n <jetson-ip> --file your-machine-config.yaml
    ```
-4. Talos installs itself to NVMe, reboots, and comes up fully operational.
-5. Bootstrap the cluster (first boot only):
+6. Talos installs itself to NVMe, reboots automatically, and comes up fully operational.
+7. Bootstrap the cluster (first boot only):
    ```bash
    talosctl bootstrap -n <jetson-ip>
    ```
+
+> After step 6 you can remove the USB drive. Talos boots from NVMe on all subsequent reboots.
 
 ---
 
