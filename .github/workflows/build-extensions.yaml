@@ -76,6 +76,16 @@ jobs:
                       /usr/local/share/boost /usr/local/graalvm
           df -h /
 
+      - name: Clone siderolabs/pkgs at pinned commit
+        if: steps.check_cache.outputs.skip != 'true'
+        run: |
+          source scripts/common.sh
+          echo "Cloning siderolabs/pkgs @ ${PKGS_COMMIT} (branch ${PKGS_BRANCH})..."
+          git clone --filter=blob:none --single-branch --branch "${PKGS_BRANCH}" \
+            https://github.com/siderolabs/pkgs /tmp/talos-pkgs
+          cd /tmp/talos-pkgs && git checkout "${PKGS_COMMIT}"
+          echo "✓ talos-pkgs ready at $(git -C /tmp/talos-pkgs rev-parse --short HEAD)"
+
       - name: Build + push extensions to ghcr.io
         if: steps.check_cache.outputs.skip != 'true'
         run: make build-extensions
