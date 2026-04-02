@@ -6,7 +6,6 @@
 #   TALOS_VERSION    Talos release                              (default: v1.12.6)
 #   KERNEL_VERSION   Linux kernel version                       (default: 6.18.18)
 #   NVGPU_VERSION    nvidia-tegra-nvgpu extension version       (default: 5.1.0)
-#   NODE_IP          Jetson IP address                          (default: 192.168.1.50)
 
 .PHONY: all keys build-extensions build-kernel uki usb help clean
 
@@ -54,7 +53,6 @@ help:
 	@echo "  Key overrides:"
 	@echo "    REGISTRY=<host:port>  Local OCI registry (default: 192.168.1.100:5001)"
 	@echo "    NVGPU_VERSION=<ver>   nvgpu extension version (default: 5.1.0)"
-	@echo "    NODE_IP=<ip>          Jetson node IP (default: 192.168.1.50)"
 	@echo ""
 	@echo "  Alternative: use GitHub Actions (.github/workflows/build-usb.yaml)"
 	@echo "    Push a tag → USB image built in the cloud, uploaded as release artifact"
