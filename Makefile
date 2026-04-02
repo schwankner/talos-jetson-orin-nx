@@ -1,4 +1,4 @@
-# Makefile — Talos Linux on NVIDIA Jetson Orin NX
+# Makefile — Talos Linux on NVIDIA Jetson Orin (AGX Orin, Orin NX, Orin Nano)
 #
 # All targets are thin wrappers around the scripts/ directory.
 # Environment variables override defaults in scripts/common.sh:
@@ -39,7 +39,7 @@ clean:
 # ── Help ─────────────────────────────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "  Talos Linux — NVIDIA Jetson Orin NX (Seeed Studio reComputer J4012)"
+	@echo "  Talos Linux — NVIDIA Jetson Orin family (AGX Orin, Orin NX, Orin Nano)"
 	@echo ""
 	@echo "  Build targets:"
 	@echo "    make all              Build UKI + USB image (default)"
