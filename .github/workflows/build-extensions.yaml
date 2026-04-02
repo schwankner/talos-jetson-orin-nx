@@ -66,16 +66,6 @@ jobs:
           chmod 600 keys/signing_key.pem
           openssl x509 -in keys/signing_key.x509 -noout -serial
 
-      - name: Free disk space for kernel build
-        if: steps.check_cache.outputs.skip != 'true'
-        run: |
-          sudo apt-get remove -y --purge '^dotnet-.*' '^llvm-.*' '^php.*' \
-            azure-cli google-cloud-sdk google-chrome-stable firefox 2>/dev/null || true
-          sudo apt-get autoremove -y 2>/dev/null || true
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /usr/local/share/boost /usr/local/graalvm
-          df -h /
-
       - name: Clone siderolabs/pkgs at pinned commit
         if: steps.check_cache.outputs.skip != 'true'
         run: |
