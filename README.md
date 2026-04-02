@@ -427,3 +427,15 @@ Contributions especially welcome for:
 - [Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html) — hardware
 - [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers) — Jetson Docker images
 - [NVIDIA JetPack SDK](https://developer.nvidia.com/embedded/jetpack) — firmware / CUDA userspace
+
+---
+
+## AI Disclaimer
+
+Parts of this project were developed with the assistance of AI tools (primarily [Claude](https://claude.ai) by Anthropic), in particular:
+
+- **Documentation** — README, inline script comments, and architecture descriptions
+- **CI/CD pipeline** — GitHub Actions workflows and Renovate configuration
+- **Debugging** — tracing build errors across the kernel/extension/signing-key chain
+
+All generated output was reviewed, tested, and validated on real hardware. The technical decisions, implementation, and final responsibility remain with the author.
