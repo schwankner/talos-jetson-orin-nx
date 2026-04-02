@@ -12,23 +12,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up QEMU (arm64 for Talos imager)
-        uses: docker/setup-qemu-action@v3
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Restore signing keys
         run: |
@@ -37,46 +25,15 @@ jobs:
           printf '%s' "${{ secrets.SIGNING_KEY_X509 }}" > keys/signing_key.x509
           chmod 600 keys/signing_key.pem
 
-      - name: Build UKI + USB image
-        run: make usb
-        timeout-minutes: 30
-        env:
-          REGISTRY: ghcr.io/${{ github.repository_owner }}
-          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
-
-      - name: Locate produced image
-        id: img
+      - name: Build + locate image
         run: |
+          make usb
           RAW=$(ls dist/*.raw dist/*.raw.zst 2>/dev/null | head -1)
           echo "path=${RAW}" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "${RAW}")" >> "$GITHUB_OUTPUT"
           ls -lh dist/
-
-      - name: Upload USB image as workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: talos-jetson-usb-${{ github.ref_name }}
-          path: ${{ steps.img.outputs.path }}
-          retention-days: 30
-
-      - name: Create GitHub Release (tag push only)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "Talos Jetson Orin NX — ${{ github.ref_name }}"
-          body: |
-            ## USB boot image — ${{ github.ref_name }}
-
-            Bootable for Seeed Studio reComputer J4012 (Jetson Orin NX 16 GB).
-            Compatible with all Jetson Orin-series modules.
-
-            ### Flash
-            ```bash
-            # macOS
-            sudo dd if=${{ steps.img.outputs.name }} of=/dev/rdiskN bs=4m && sync
-            # Linux
-            sudo dd if=${{ steps.img.outputs.name }} of=/dev/sdX bs=4M status=progress && sync
-            ```
-
-            See [README](https://github.com/${{ github.repository }}#readme) for instructions.
-          files: ${{ steps.img.outputs.path }}
+        id: build
+        timeout-minutes: 30
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
