@@ -31,7 +31,7 @@ Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstu
 > the same restriction. No Jetson setup — official or custom — can run arbitrary CUDA images.
 >
 > **What works ✅**
-> - `ollama/ollama:jetson` — bundles its own Tegra-compatible CUDA runtime
+> - `ollama/ollama:latest` (arm64) — uses the Tegra CUDA runtime provided by the nvgpu extension in this project
 > - `nvcr.io/nvidia/l4t-cuda:*` — NVIDIA's official L4T CUDA base images
 > - [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers) — community Jetson image collection (PyTorch, TensorRT, etc.)
 > - Any image built `FROM nvcr.io/nvidia/l4t-*` or explicitly targeting Tegra/L4T
