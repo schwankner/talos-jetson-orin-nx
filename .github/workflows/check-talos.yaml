@@ -19,8 +19,9 @@ jobs:
         id: current
         run: |
           # Read the default from common.sh
+          # Pattern stops at } or " to avoid capturing the closing } of ${VAR:-default}
           CURRENT=$(grep 'TALOS_VERSION=' scripts/common.sh | grep -v '#' | head -1 \
-            | sed 's/.*:-\(.*\)".*/\1/')
+            | sed 's/.*:-\([^}"]*\).*/\1/')
           echo "version=${CURRENT}" >> "$GITHUB_OUTPUT"
           echo "Current Talos version: ${CURRENT}"
 
@@ -60,6 +61,16 @@ jobs:
             --json number \
             --jq 'length')
           echo "existing=${ISSUE_COUNT}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure dependencies label exists
+        if: |
+          steps.compare.outputs.update_needed == 'true' &&
+          steps.existing_issue.outputs.existing == '0'
+        run: |
+          gh label create "dependencies" --color "0075ca" --description "Dependency updates" \
+            --repo "${{ github.repository }}" || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
