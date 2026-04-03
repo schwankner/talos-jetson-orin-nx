@@ -95,7 +95,7 @@ jobs:
       - name: Build + push extensions to ghcr.io
         if: steps.check_cache.outputs.skip != 'true'
         run: make build-extensions
-        timeout-minutes: 180
+        timeout-minutes: 360
         env:
           REGISTRY: ghcr.io/${{ github.repository_owner }}
           REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
