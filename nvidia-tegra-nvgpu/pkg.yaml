@@ -179,6 +179,7 @@ steps:
         # flags BEFORE passing any argument to the real clang binary. This is
         # source-independent — it works regardless of which Makefile adds the flag
         # or via which Kconfig variable it is expressed.
+        mkdir -p /usr/local/bin
         printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}"\n' > /usr/local/bin/clang-oot
         chmod +x /usr/local/bin/clang-oot
         echo "clang-oot wrapper installed"
@@ -293,6 +294,7 @@ steps:
         # The wrapper was created in the previous build step, but Docker BuildKit
         # may have served a cached nvidia-linux-header layer that predates it.
         # Re-create it here unconditionally to be safe.
+        mkdir -p /usr/local/bin
         printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}"\n' > /usr/local/bin/clang-oot
         chmod +x /usr/local/bin/clang-oot
         # ── nvgpu source patches ─────────────────────────────────────────────────────
