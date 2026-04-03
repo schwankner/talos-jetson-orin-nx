@@ -180,7 +180,7 @@ steps:
         # source-independent — it works regardless of which Makefile adds the flag
         # or via which Kconfig variable it is expressed.
         mkdir -p /usr/local/bin
-        printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    -Wimplicit-fallthrough=*) filtered+=("-Wimplicit-fallthrough") ;;\n    -Wno-maybe-uninitialized) filtered+=("-Wno-uninitialized") ;;\n    -Wno-alloc-size-larger-than|-Wno-alloc-size-larger-than=*) ;;\n    -fplugin=*|-fplugin-arg-*) ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}" -Wno-unknown-warning-option -Wno-enum-enum-conversion -Wno-implicit-fallthrough\n' > /usr/local/bin/clang-oot
+        printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    -Wimplicit-fallthrough=*) filtered+=("-Wimplicit-fallthrough") ;;\n    -Wno-maybe-uninitialized) filtered+=("-Wno-uninitialized") ;;\n    -Wno-alloc-size-larger-than|-Wno-alloc-size-larger-than=*) ;;\n    -fplugin=*|-fplugin-arg-*) ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}" -Wno-unknown-warning-option -Wno-enum-enum-conversion -Wno-implicit-fallthrough -Wno-gnu-variable-sized-type-not-at-end\n' > /usr/local/bin/clang-oot
         chmod +x /usr/local/bin/clang-oot
         echo "clang-oot wrapper installed"
 
@@ -295,7 +295,7 @@ steps:
         # may have served a cached nvidia-linux-header layer that predates it.
         # Re-create it here unconditionally to be safe.
         mkdir -p /usr/local/bin
-        printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    -Wimplicit-fallthrough=*) filtered+=("-Wimplicit-fallthrough") ;;\n    -Wno-maybe-uninitialized) filtered+=("-Wno-uninitialized") ;;\n    -Wno-alloc-size-larger-than|-Wno-alloc-size-larger-than=*) ;;\n    -fplugin=*|-fplugin-arg-*) ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}" -Wno-unknown-warning-option -Wno-enum-enum-conversion -Wno-implicit-fallthrough\n' > /usr/local/bin/clang-oot
+        printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    -Wimplicit-fallthrough=*) filtered+=("-Wimplicit-fallthrough") ;;\n    -Wno-maybe-uninitialized) filtered+=("-Wno-uninitialized") ;;\n    -Wno-alloc-size-larger-than|-Wno-alloc-size-larger-than=*) ;;\n    -fplugin=*|-fplugin-arg-*) ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}" -Wno-unknown-warning-option -Wno-enum-enum-conversion -Wno-implicit-fallthrough -Wno-gnu-variable-sized-type-not-at-end\n' > /usr/local/bin/clang-oot
         chmod +x /usr/local/bin/clang-oot
         # ── nvgpu source patches ─────────────────────────────────────────────────────
         # Kernel 6.18 compat: always use vm_flags_set (conftest fails in 6.12+)
