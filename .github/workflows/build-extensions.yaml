@@ -41,19 +41,28 @@ jobs:
           source scripts/common.sh
           NVGPU_IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos"
           KM_IMAGE="ghcr.io/${{ github.repository_owner }}/kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos"
+          FW_IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-firmware-ext:${FIRMWARE_EXT_TAG}"
           NVGPU_EXISTS=false
           KM_EXISTS=false
+          FW_EXISTS=false
           docker manifest inspect "${NVGPU_IMAGE}" >/dev/null 2>&1 && NVGPU_EXISTS=true || true
           docker manifest inspect "${KM_IMAGE}"   >/dev/null 2>&1 && KM_EXISTS=true   || true
+          docker manifest inspect "${FW_IMAGE}"   >/dev/null 2>&1 && FW_EXISTS=true   || true
           if ${NVGPU_EXISTS} && ${KM_EXISTS}; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "✓ Both extension images already in ghcr.io — skipping build"
-            echo "  ${NVGPU_IMAGE}"
-            echo "  ${KM_IMAGE}"
+            echo "✓ kernel+nvgpu extension images already in ghcr.io — skipping bldr build"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
             ${NVGPU_EXISTS} || echo "Will build: ${NVGPU_IMAGE}"
             ${KM_EXISTS}    || echo "Will build: ${KM_IMAGE}"
+          fi
+          # firmware is independent — track separately
+          if ${FW_EXISTS}; then
+            echo "skip_fw=true" >> "$GITHUB_OUTPUT"
+            echo "✓ nvidia-firmware-ext:${FIRMWARE_EXT_TAG} already in ghcr.io — skipping firmware build"
+          else
+            echo "skip_fw=false" >> "$GITHUB_OUTPUT"
+            echo "Will build: ${FW_IMAGE}"
           fi
 
       - name: Set up Docker Buildx (named talos-builder for script compatibility)
@@ -116,3 +125,62 @@ jobs:
           # (kernel-build, llvm, base) across CI runs. On nvgpu-only changes the
           # kernel compile (~40 min) is a cache hit → build drops to ~15–20 min.
           CACHE_REGISTRY: ghcr.io/${{ github.repository_owner }}/build-cache
+
+      - name: Build + push nvidia-firmware-ext to ghcr.io
+        # Independent of the kernel build — only runs when the tag is not yet in ghcr.io.
+        # Sources GA10B firmware from the NVIDIA L4T r36 (JetPack 6.2) apt repository.
+        if: steps.check_cache.outputs.skip_fw != 'true'
+        env:
+          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
+        run: |
+          source scripts/common.sh
+          echo "=== nvidia-firmware-ext:${FIRMWARE_EXT_TAG} build ==="
+
+          # ── Download nvidia-l4t-firmware .deb from NVIDIA CDN ─────────────────
+          # Parse the apt package index to find the exact .deb URL (no sudo needed).
+          FW_TMP=$(mktemp -d)
+          trap 'rm -rf "${FW_TMP}"' EXIT
+
+          echo "Fetching L4T r36 package index..."
+          INDEX_URL="https://repo.download.nvidia.com/jetson/common/dists/r36/main/binary-arm64/Packages.gz"
+          curl -fsSL "${INDEX_URL}" | gunzip > "${FW_TMP}/Packages"
+
+          # Extract the Filename: line for nvidia-l4t-firmware
+          # The Packages file lists all versions; pick the one matching 36.5.x
+          PKG_PATH=$(awk '/^Package: nvidia-l4t-firmware$/{found=1} found && /^Filename:/{print $2; exit}' \
+            "${FW_TMP}/Packages")
+          [[ -n "${PKG_PATH}" ]] || { echo "ERROR: nvidia-l4t-firmware not found in L4T r36 index"; exit 1; }
+          echo "Package: ${PKG_PATH}"
+
+          curl -fsSL "https://repo.download.nvidia.com/jetson/common/${PKG_PATH}" \
+            -o "${FW_TMP}/nvidia-l4t-firmware.deb"
+          echo "Downloaded: $(du -h ${FW_TMP}/nvidia-l4t-firmware.deb | cut -f1)"
+
+          # ── Extract firmware files ──────────────────────────────────────────────
+          dpkg-deb --extract "${FW_TMP}/nvidia-l4t-firmware.deb" "${FW_TMP}/pkg/"
+
+          GA10B_SRC="${FW_TMP}/pkg/usr/lib/firmware/ga10b"
+          [[ -d "${GA10B_SRC}" ]] \
+            || { echo "ERROR: ga10b/ not found at ${GA10B_SRC}"; ls -la "${FW_TMP}/pkg/usr/lib/firmware/" || true; exit 1; }
+          echo "GA10B firmware files:"
+          ls -la "${GA10B_SRC}/"
+
+          # ── Build OCI extension ─────────────────────────────────────────────────
+          EXT_DIR=$(mktemp -d)
+          mkdir -p "${EXT_DIR}/rootfs/usr/lib/firmware"
+          cp -r "${GA10B_SRC}" "${EXT_DIR}/rootfs/usr/lib/firmware/ga10b"
+
+          # Use printf to avoid YAML-indentation contaminating the file contents
+          printf 'version: v1alpha1\nmetadata:\n  name: nvidia-firmware-ext\n  version: %s\n  author: custom-build\n  description: NVIDIA GA10B firmware from JetPack r36.5 (pmu_pkc_prod_sig.bin + friends)\n  compatibility:\n    talos:\n      version: ">= 1.12.6"\n' \
+            "${FIRMWARE_EXT_TAG}" > "${EXT_DIR}/manifest.yaml"
+
+          printf 'FROM scratch\nCOPY manifest.yaml /manifest.yaml\nCOPY rootfs /rootfs\n' \
+            > "${EXT_DIR}/Dockerfile"
+
+          docker buildx build \
+            --platform linux/arm64 \
+            -t "${REGISTRY_DOCKER}/nvidia-firmware-ext:${FIRMWARE_EXT_TAG}" \
+            --push \
+            "${EXT_DIR}/"
+
+          echo "✓ nvidia-firmware-ext:${FIRMWARE_EXT_TAG} pushed to ghcr.io"
