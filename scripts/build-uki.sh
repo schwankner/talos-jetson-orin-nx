@@ -124,11 +124,16 @@ EOF
 )
 
 # ── 4. Run imager to build UKI ────────────────────────────────────────────────
+# Mount Docker credentials so the imager can pull private ghcr.io images
+# (e.g. nvidia-firmware-ext). DOCKER_CONFIG defaults to ~/.docker.
+# In CI, docker/login-action writes creds to $DOCKER_CONFIG/config.json.
+DOCKER_CONFIG_DIR="${DOCKER_CONFIG:-${HOME}/.docker}"
 info "Running imager to assemble UKI..."
 echo "${PROFILE}" | docker run --rm -i \
   --platform linux/arm64 \
   --add-host host.docker.internal:host-gateway \
   -v "${OUT_DIR}:/out" \
+  -v "${DOCKER_CONFIG_DIR}/config.json:/root/.docker/config.json:ro" \
   "${CUSTOM_IMAGER_TAG}" \
   -
 
