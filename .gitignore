@@ -26,6 +26,7 @@ imager-out-*/
 initramfs-*.xz
 initramfs-*.zst
 kernel-modules-*/
+!kernel-modules-clang/
 systemd-boot.efi
 
 # ── macOS system files ───────────────────────────────────────────────────────

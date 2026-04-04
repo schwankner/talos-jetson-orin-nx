@@ -39,13 +39,21 @@ jobs:
         id: check_cache
         run: |
           source scripts/common.sh
-          IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos"
-          if docker manifest inspect "${IMAGE}" >/dev/null 2>&1; then
+          NVGPU_IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos"
+          KM_IMAGE="ghcr.io/${{ github.repository_owner }}/kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos"
+          NVGPU_EXISTS=false
+          KM_EXISTS=false
+          docker manifest inspect "${NVGPU_IMAGE}" >/dev/null 2>&1 && NVGPU_EXISTS=true || true
+          docker manifest inspect "${KM_IMAGE}"   >/dev/null 2>&1 && KM_EXISTS=true   || true
+          if ${NVGPU_EXISTS} && ${KM_EXISTS}; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "✓ ${IMAGE} already in ghcr.io — skipping build"
+            echo "✓ Both extension images already in ghcr.io — skipping build"
+            echo "  ${NVGPU_IMAGE}"
+            echo "  ${KM_IMAGE}"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Will build: ${IMAGE}"
+            ${NVGPU_EXISTS} || echo "Will build: ${NVGPU_IMAGE}"
+            ${KM_EXISTS}    || echo "Will build: ${KM_IMAGE}"
           fi
 
       - name: Set up Docker Buildx (named talos-builder for script compatibility)
@@ -76,11 +84,16 @@ jobs:
           cd /tmp/talos-pkgs && git checkout "${PKGS_COMMIT}"
           echo "✓ talos-pkgs ready at $(git -C /tmp/talos-pkgs rev-parse --short HEAD)"
 
-          # Inject our custom nvidia-tegra-nvgpu pkg into the pkgs tree
+          # Inject our custom packages into the pkgs tree
           mkdir -p /tmp/talos-pkgs/nvidia-tegra-nvgpu
           cp "${GITHUB_WORKSPACE}/nvidia-tegra-nvgpu/pkg.yaml" \
              /tmp/talos-pkgs/nvidia-tegra-nvgpu/pkg.yaml
           echo "✓ nvidia-tegra-nvgpu/pkg.yaml injected"
+
+          mkdir -p /tmp/talos-pkgs/kernel-modules-clang
+          cp "${GITHUB_WORKSPACE}/kernel-modules-clang/pkg.yaml" \
+             /tmp/talos-pkgs/kernel-modules-clang/pkg.yaml
+          echo "✓ kernel-modules-clang/pkg.yaml injected"
 
           # Patch Pkgfile: inject custom LLVM vars needed by nvidia-tegra-nvgpu/pkg.yaml
           # (the official siderolabs/pkgs Pkgfile does not define LLVM_IMAGE / LLVM_REV)
