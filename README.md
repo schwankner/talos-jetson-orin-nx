@@ -12,7 +12,7 @@ compute support in Kubernetes pods. One USB image boots the entire Orin family (
 Orin NX, Orin Nano) — all share the same T234 SoC, GA10B GPU, and UEFI boot path.
 
 Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html)**
-(Jetson Orin NX 16 GB). Verified result as of 2026-04-01:
+(Jetson Orin NX 16 GB). Verified result as of 2026-04-04:
 
 - GPU inference: **~7–8 tok/s** decode, **~700 tok/s** prefill (qwen2.5:1.5b Q4_K_M, 29/29 layers on GPU, on Ollama, Flash Attention enabled)
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
@@ -346,11 +346,11 @@ Current committed key serial: `74FD747A092BD42575ED4CBE6F7E2479A6FEC740`
 
 ### Key Technical Challenges
 
-Getting GPU compute to work required solving 9 non-trivial problems. The full
-root-cause analysis (firmware ELOOP, signing key reproducibility, Clang toolchain
-consistency, kernel 6.18 API changes, undefined L4T symbols, CUDA error 999,
-devfreq governor, CDI / containerd 2.x, UBSAN netlist bug) is documented in
-**[BUGS.md](BUGS.md)**.
+Getting GPU compute to work required solving 11 non-trivial problems. The full
+root-cause analysis (firmware ELOOP, signing key reproducibility, GCC 15/Clang 22
+toolchain mismatch, kernel 6.18 API changes, undefined L4T symbols, CUDA error 999,
+devfreq governor, CDI / containerd 2.x, UBSAN netlist bug, CI extension image
+distribution) is documented in **[BUGS.md](BUGS.md)**.
 
 ---
 
@@ -366,7 +366,8 @@ devfreq governor, CDI / containerd 2.x, UBSAN netlist bug) is documented in
 | OE4T linux-nv-oot | `ea32e7f` | NVIDIA OOT framework (host1x, conftest) |
 | OE4T linux-hwpm | `4d8a699` | Hardware Performance Monitor |
 | `nvidia-tegra-nvgpu` ext | **5.1.0** | devfreq ccflags fix → `governor_pod_scaling.ko` built |
-| `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added |
+| `kernel-modules-clang` ext | **1.1.0** | Full in-tree Clang module tree, signed with `talos_signing_key.pem` |
+| `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added; sourced from L4T r36.5 apt (`t234` repo) |
 
 ---
 
