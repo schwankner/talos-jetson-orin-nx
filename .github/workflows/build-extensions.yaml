@@ -141,34 +141,64 @@ jobs:
           FW_TMP=$(mktemp -d)
           trap 'rm -rf "${FW_TMP}"' EXIT
 
-          # NVIDIA Jetson apt repo: distribution name is the full minor version (r36.5),
-          # not just the major (r36). Try r36.5 first, then r36.4.3 as fallback.
+          # nvidia-l4t-firmware can be in the 'common' or board-specific 't234' repo.
+          # The distribution name is the full minor version (r36.5), not just r36.
+          # Search both repos × common dist names and fall back to linux-firmware.
+          DEB_FILE="${FW_TMP}/nvidia-l4t-firmware.deb"
           PKG_PATH=""
-          for DIST in r36.5 r36.5.0 r36.4.3 r36; do
-            INDEX_URL="https://repo.download.nvidia.com/jetson/common/dists/${DIST}/main/binary-arm64/Packages.gz"
-            echo "Trying L4T distribution: ${DIST} ..."
-            if curl -fsSL --max-time 15 "${INDEX_URL}" | gunzip > "${FW_TMP}/Packages" 2>/dev/null \
-                && grep -q "^Package: nvidia-l4t-firmware$" "${FW_TMP}/Packages"; then
-              echo "Found package index at distribution: ${DIST}"
-              PKG_PATH=$(awk '/^Package: nvidia-l4t-firmware$/{found=1} found && /^Filename:/{print $2; exit}' \
-                "${FW_TMP}/Packages")
-              break
-            fi
-          done
-          [[ -n "${PKG_PATH}" ]] || { echo "ERROR: nvidia-l4t-firmware not found in any L4T distribution"; exit 1; }
-          echo "Package path: ${PKG_PATH}"
+          BASE_URL=""
 
-          curl -fsSL "https://repo.download.nvidia.com/jetson/common/${PKG_PATH}" \
-            -o "${FW_TMP}/nvidia-l4t-firmware.deb"
-          echo "Downloaded: $(du -h ${FW_TMP}/nvidia-l4t-firmware.deb | cut -f1)"
+          for REPO in common t234; do
+            for DIST in r36.5 r36.5.0 r36.4.3 r36; do
+              INDEX_URL="https://repo.download.nvidia.com/jetson/${REPO}/dists/${DIST}/main/binary-arm64/Packages.gz"
+              HTTP_CODE=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 "${INDEX_URL}")
+              echo "  ${REPO}/${DIST}: HTTP ${HTTP_CODE}"
+              if [[ "${HTTP_CODE}" == "200" ]]; then
+                # Download and inspect
+                curl -fsSL --max-time 30 "${INDEX_URL}" 2>/dev/null \
+                  | gunzip 2>/dev/null > "${FW_TMP}/Packages-${REPO}-${DIST}" || true
+                # Debug: show available firmware packages
+                echo "    firmware pkgs: $(grep '^Package:.*firmware' "${FW_TMP}/Packages-${REPO}-${DIST}" | head -5 || echo none)"
+                if grep -q "^Package: nvidia-l4t-firmware$" "${FW_TMP}/Packages-${REPO}-${DIST}"; then
+                  PKG_PATH=$(awk '/^Package: nvidia-l4t-firmware$/{found=1} found && /^Filename:/{print $2; exit}' \
+                    "${FW_TMP}/Packages-${REPO}-${DIST}")
+                  BASE_URL="https://repo.download.nvidia.com/jetson/${REPO}"
+                  echo "  ✓ Found nvidia-l4t-firmware in ${REPO}/${DIST}: ${PKG_PATH}"
+                  break 2
+                fi
+              fi
+            done
+          done
+
+          if [[ -n "${PKG_PATH}" ]]; then
+            curl -fsSL "${BASE_URL}/${PKG_PATH}" -o "${DEB_FILE}"
+            echo "Downloaded from NVIDIA CDN: $(du -h ${DEB_FILE} | cut -f1)"
+          else
+            # Fallback: linux-firmware (upstream kernel.org tree includes GA10B files)
+            # Files land at usr/lib/firmware/nvidia/ga10b/ — remap to ga10b/
+            echo "⚠ NVIDIA CDN package not found — falling back to linux-firmware"
+            (cd "${FW_TMP}" && apt-get download linux-firmware 2>&1 | tail -3)
+            DEB_FILE=$(ls "${FW_TMP}"/linux-firmware_*.deb 2>/dev/null | head -1)
+            [[ -f "${DEB_FILE}" ]] || { echo "ERROR: linux-firmware download failed"; exit 1; }
+            echo "Downloaded linux-firmware: $(du -h ${DEB_FILE} | cut -f1)"
+          fi
 
           # ── Extract firmware files ──────────────────────────────────────────────
-          dpkg-deb --extract "${FW_TMP}/nvidia-l4t-firmware.deb" "${FW_TMP}/pkg/"
+          dpkg-deb --extract "${DEB_FILE}" "${FW_TMP}/pkg/"
 
-          GA10B_SRC="${FW_TMP}/pkg/usr/lib/firmware/ga10b"
-          [[ -d "${GA10B_SRC}" ]] \
-            || { echo "ERROR: ga10b/ not found at ${GA10B_SRC}"; ls -la "${FW_TMP}/pkg/usr/lib/firmware/" || true; exit 1; }
-          echo "GA10B firmware files:"
+          # L4T package: files at usr/lib/firmware/ga10b/
+          # linux-firmware: files at usr/lib/firmware/nvidia/ga10b/ → remap
+          if [[ -d "${FW_TMP}/pkg/usr/lib/firmware/ga10b" ]]; then
+            GA10B_SRC="${FW_TMP}/pkg/usr/lib/firmware/ga10b"
+          elif [[ -d "${FW_TMP}/pkg/usr/lib/firmware/nvidia/ga10b" ]]; then
+            GA10B_SRC="${FW_TMP}/pkg/usr/lib/firmware/nvidia/ga10b"
+            echo "Note: using linux-firmware path (nvidia/ga10b/)"
+          else
+            echo "ERROR: ga10b/ not found at any expected path"
+            find "${FW_TMP}/pkg/usr/lib/firmware/" -maxdepth 3 -type d 2>/dev/null | head -20 || true
+            exit 1
+          fi
+          echo "GA10B firmware files (from $(basename $(dirname ${GA10B_SRC}))/ga10b/):"
           ls -la "${GA10B_SRC}/"
 
           # ── Build OCI extension ─────────────────────────────────────────────────
