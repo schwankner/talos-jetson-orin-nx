@@ -28,7 +28,7 @@ LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
 LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.1.0}"          # 1.0.0 / 2.0.0 / 3.0.0 / 4.0.0 / 5.0.0 / 5.1.0 (devfreq fix)
+NVGPU_VERSION="${NVGPU_VERSION:-5.2.0}"          # 1.0.0 / 2.0.0 / 3.0.0 / 4.0.0 / 5.0.0 / 5.1.0 (devfreq fix) / 5.2.0 (softdep path fix)
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 
