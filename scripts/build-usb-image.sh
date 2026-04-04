@@ -21,7 +21,7 @@ source "$(dirname "$0")/common.sh"
 
 UKI_PATH="${UKI_PATH:-${DIST_DIR}/uki-nvgpu${NVGPU_VERSION}/metal-arm64-uki.efi}"
 USB_OUT="${DIST_DIR}/talos-usb-nvgpu${NVGPU_VERSION}.raw"
-USB_SIZE_MB="${USB_SIZE_MB:-250}"
+USB_SIZE_MB="${USB_SIZE_MB:-700}"
 
 [[ -f "${UKI_PATH}" ]] || error "UKI not found at ${UKI_PATH}. Run 01-build-uki.sh first."
 
