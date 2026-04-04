@@ -386,3 +386,51 @@ debug-time sanitizer warning, not a runtime error.
 
 **Upstream fix**: Change `regions[1]` to `regions[]` (C99 flexible array
 member) in `netlist_priv.h`. No upstream issue filed as of 2026-04-01.
+
+---
+
+## Bug 12 — kernel-modules-clang Removed Prematurely; squashfs Module Key Mismatch
+
+**Symptom (run 16/17)**: After the previous session removed `kernel-modules-clang`
+from the UKI systemExtensions, Ethernet (r8169/RTL8168h via PCIe) stopped working
+and nvgpu failed with `Unknown symbol tegra_vpr_dev / nvmap_dma_alloc_attrs /
+nvmap_dma_free_attrs / emc_freq_to_bw`. Three `Loading of module with unavailable
+key is rejected` messages appeared at ~14 s (udevd startup).
+
+**Root cause**: The Talos stock installer image (`ghcr.io/siderolabs/installer:v1.12.6`)
+bundles an initramfs whose squashfs contains in-tree kernel modules signed with the
+**official Talos v1.12.6 release key**. Our custom kernel build uses a **different
+throw-away key** (`863dd523`, auto-generated from siderolabs/pkgs). These keys do
+not match, so any squashfs module loaded by udevd is rejected with
+`"unavailable key"` under `module.sig_enforce=1`.
+
+Rejected squashfs modules included:
+- `r8169.ko` — PCIe Ethernet driver (RTL8168h on reComputer J4012)
+- Two additional Tegra-specific modules (exact names not in dmesg output)
+
+nvgpu's OOT dependency chain (nvmap → mc-utils) depends on in-tree Tegra modules
+from the squashfs. When those squashfs modules are rejected, nvmap cannot initialise
+and fails silently. nvgpu then sees missing symbols for `tegra_vpr_dev`,
+`nvmap_dma_alloc_attrs`, `nvmap_dma_free_attrs`, `emc_freq_to_bw`.
+
+**Why run 15 worked**: kernel-modules-clang provides **all in-tree modules** signed
+with the **same key as the running kernel** (both built in the same bldr run). The
+Talos extension overlayfs places extension modules in `extra/` which has higher
+depmod priority than `kernel/` (squashfs). udevd therefore loads the extension
+versions (correct key, accepted) and never reaches the rejected squashfs versions.
+
+**Misdiagnosis in previous session**: Run 16 had kernel-modules-clang loaded but
+the image was built for the April 1 Clang kernel while run 16/17 used the April 3
+GCC kernel — a kernel ABI mismatch. The modules could not load (wrong ABI), the
+squashfs fallback was rejected (wrong signing key), so Ethernet failed in both
+run 16 (WITH kernel-modules-clang) and run 17 (WITHOUT it). This was incorrectly
+attributed to "overlayfs shadowing". The actual root cause was the stale
+kernel-modules-clang image.
+
+**Fix**:
+1. `KERNEL_MODULES_VERSION` bumped `1.1.0 → 1.2.0` in `common.sh` — forces
+   a fresh ghcr.io build of kernel-modules-clang for the current kernel.
+2. `kernel-modules-clang` re-added to the UKI `systemExtensions` list in
+   `scripts/build-uki.sh`.
+3. CI will rebuild kernel-modules-clang against the current kernel; all in-tree
+   modules get signed with the correct key, shadowing the squashfs modules.

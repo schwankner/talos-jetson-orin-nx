@@ -107,6 +107,8 @@ input:
     imageRef: ${REGISTRY_DOCKER}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}
     forceInsecure: true
   systemExtensions:
+    - imageRef: ${REGISTRY_DOCKER}/kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos
+      forceInsecure: true
     - imageRef: ${REGISTRY_DOCKER}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos
       forceInsecure: true
     - imageRef: ${REGISTRY_DOCKER}/nvidia-firmware-ext:${FIRMWARE_EXT_TAG}
