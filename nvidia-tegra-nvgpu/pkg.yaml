@@ -386,6 +386,14 @@ steps:
         printf 'softdep host1x-fence pre: host1x\n' \
           >> /rootfs/usr/local/lib/modprobe.d/nvidia-tegra.conf
 
+        # Also export vmlinuz.efi + signing key so the build script can build
+        # custom-installer without a separate 4.72 GB kernel-build export step.
+        mkdir -p /rootfs/kernel
+        cp /src/arch/arm64/boot/vmlinuz.efi /rootfs/kernel/vmlinuz.efi
+        cp /src/certs/talos_signing_key.x509 /rootfs/kernel/talos_signing_key.x509 2>/dev/null || \
+          cp /src/certs/signing_key.x509 /rootfs/kernel/signing_key.x509 2>/dev/null || true
+        echo "Exported vmlinuz.efi and signing key to /rootfs/kernel/"
+
         echo "Installed modules:"
         find /rootfs -name "*.ko" | sort
 finalize:
