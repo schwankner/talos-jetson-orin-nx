@@ -186,19 +186,19 @@ jobs:
           # ── Extract firmware files ──────────────────────────────────────────────
           dpkg-deb --extract "${DEB_FILE}" "${FW_TMP}/pkg/"
 
-          # L4T package: files at usr/lib/firmware/ga10b/
-          # linux-firmware: files at usr/lib/firmware/nvidia/ga10b/ → remap
-          if [[ -d "${FW_TMP}/pkg/usr/lib/firmware/ga10b" ]]; then
-            GA10B_SRC="${FW_TMP}/pkg/usr/lib/firmware/ga10b"
-          elif [[ -d "${FW_TMP}/pkg/usr/lib/firmware/nvidia/ga10b" ]]; then
-            GA10B_SRC="${FW_TMP}/pkg/usr/lib/firmware/nvidia/ga10b"
-            echo "Note: using linux-firmware path (nvidia/ga10b/)"
-          else
-            echo "ERROR: ga10b/ not found at any expected path"
-            find "${FW_TMP}/pkg/usr/lib/firmware/" -maxdepth 3 -type d 2>/dev/null | head -20 || true
+          echo "Extracted package tree (all dirs):"
+          find "${FW_TMP}/pkg" -type d | sort
+
+          # Find ga10b/ directory at any depth — L4T may use /lib/firmware/ or
+          # /usr/lib/firmware/, with or without a 'nvidia/' prefix.
+          GA10B_SRC=$(find "${FW_TMP}/pkg" -type d -name "ga10b" | head -1)
+          if [[ -z "${GA10B_SRC}" ]]; then
+            echo "ERROR: no ga10b/ directory found in package"
+            echo "All .bin files in package:"
+            find "${FW_TMP}/pkg" -name "*.bin" | sort
             exit 1
           fi
-          echo "GA10B firmware files (from $(basename $(dirname ${GA10B_SRC}))/ga10b/):"
+          echo "GA10B firmware source: ${GA10B_SRC}"
           ls -la "${GA10B_SRC}/"
 
           # ── Build OCI extension ─────────────────────────────────────────────────
