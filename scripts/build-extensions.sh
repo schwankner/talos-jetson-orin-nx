@@ -91,6 +91,8 @@ if [[ -n "${CACHE_REGISTRY}" ]]; then
   CACHE_TO_NVGPU=(
     "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU},mode=min"
   )
+  # Kernel cache: used as --cache-from in the nvgpu build so kernel steps
+  # are cache hits. Populated on the first successful nvgpu cold build.
   CACHE_FROM_KERNEL=(
     "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL}"
   )
@@ -115,6 +117,7 @@ if [[ "${KERNEL_ONLY}" != "1" ]]; then
     --platform linux/arm64 \
     "${CACHE_FROM_NVGPU[@]}" \
     "${CACHE_TO_NVGPU[@]}" \
+    "${CACHE_TO_KERNEL[@]}" \
     --output "type=local,dest=${NVGPU_OUT_DIR}" \
     . 2>&1 | tee "${BUILD_LOG}"
 
@@ -125,42 +128,20 @@ else
   info "Step 2: Skipped (KERNEL_ONLY=1)"
 fi
 
-# ── Step 4: Extract vmlinuz + signing key from kernel-build ───────────────────
-# Use a tiny wrapper Dockerfile that copies ONLY vmlinuz.efi and the signing key
-# from the cached kernel-build layer → exports a few MB instead of 4.72 GB.
-info "Step 3: Extracting vmlinuz.efi from kernel-build (cache hit, tiny export)..."
-mkdir -p "${KERNEL_OUT_DIR}"
+# ── Step 4: Extract vmlinuz + signing key from nvgpu build output ─────────────
+# vmlinuz.efi and the signing key are now exported by the nvgpu build itself
+# (install section copies them to /rootfs/kernel/). No separate 4.72 GB
+# kernel-build export needed.
+info "Step 3: Locating vmlinuz.efi from nvgpu build output..."
 
-KERNEL_VMLINUZ_DOCKERFILE=$(mktemp --suffix=.dockerfile)
-trap 'rm -f "${KERNEL_VMLINUZ_DOCKERFILE}"' EXIT
-cat > "${KERNEL_VMLINUZ_DOCKERFILE}" << 'KEOF'
-# syntax=docker/dockerfile:1
-FROM kernel-build AS kernel-vmlinuz-extract
-RUN mkdir -p /vmlinuz-out && \
-    cp /src/arch/arm64/boot/vmlinuz.efi /vmlinuz-out/ && \
-    cp /src/certs/talos_signing_key.x509 /vmlinuz-out/ 2>/dev/null || true && \
-    cp /src/certs/signing_key.x509 /vmlinuz-out/kernel_signing_key.x509 2>/dev/null || true
-FROM scratch
-COPY --from=kernel-vmlinuz-extract /vmlinuz-out /
-KEOF
-
-docker buildx build \
-  --builder talos-builder \
-  --file "${KERNEL_VMLINUZ_DOCKERFILE}" \
-  --platform linux/arm64 \
-  "${CACHE_FROM_KERNEL[@]}" \
-  "${CACHE_TO_KERNEL[@]}" \
-  --output "type=local,dest=${KERNEL_OUT_DIR}" \
-  "${TALOS_PKGS_DIR}" 2>&1 | tee "${BUILD_LOG}.kernel"
-
-VMLINUZ_SRC="${KERNEL_OUT_DIR}/vmlinuz.efi"
-[[ -f "${VMLINUZ_SRC}" ]] || error "vmlinuz.efi not found in kernel output at ${VMLINUZ_SRC}"
+VMLINUZ_SRC="${NVGPU_OUT_DIR}/rootfs/kernel/vmlinuz.efi"
+[[ -f "${VMLINUZ_SRC}" ]] || error "vmlinuz.efi not found at ${VMLINUZ_SRC}"
 info "    vmlinuz.efi: $(ls -lh ${VMLINUZ_SRC} | awk '{print $5}')"
 
 # Verify the kernel embedded the correct key
-KERNEL_KEY_SERIAL=$(openssl x509 -in "${KERNEL_OUT_DIR}/talos_signing_key.x509" \
+KERNEL_KEY_SERIAL=$(openssl x509 -in "${NVGPU_OUT_DIR}/rootfs/kernel/talos_signing_key.x509" \
   -noout -serial 2>/dev/null | cut -d= -f2 || \
-  openssl x509 -in "${KERNEL_OUT_DIR}/kernel_signing_key.x509" \
+  openssl x509 -in "${NVGPU_OUT_DIR}/rootfs/kernel/signing_key.x509" \
   -noout -serial 2>/dev/null | cut -d= -f2 || echo "UNKNOWN")
 EXPECTED_SERIAL=$(openssl x509 -in "${REPO_ROOT}/keys/signing_key.x509" -noout -serial | cut -d= -f2)
 if [[ "${KERNEL_KEY_SERIAL}" != "${EXPECTED_SERIAL}" ]]; then
