@@ -434,3 +434,48 @@ kernel-modules-clang image.
    `scripts/build-uki.sh`.
 3. CI will rebuild kernel-modules-clang against the current kernel; all in-tree
    modules get signed with the correct key, shadowing the squashfs modules.
+
+---
+
+## Bug 13 — softdep File in Wrong Path; nvgpu Unknown Symbol (nvmap / mc-utils)
+
+**Symptom (run 19)**: Ethernet ✅ working, NVMe ✅ detected, but nvgpu ❌ fails
+with `Unknown symbol` errors:
+```
+nvgpu: Unknown symbol tegra_vpr_dev (err -2)
+nvgpu: Unknown symbol nvmap_dma_alloc_attrs (err -2)
+nvgpu: Unknown symbol nvmap_dma_free_attrs (err -2)
+nvgpu: Unknown symbol emc_freq_to_bw (err -2)
+```
+The first three symbols are exported by `nvmap.ko`; `emc_freq_to_bw` is exported
+by `mc-utils.ko`. nvmap and mc-utils were not loaded before nvgpu despite a
+`softdep nvgpu pre: host1x nvmap host1x-fence mc-utils` declaration.
+
+**Root cause**: The `softdep` configuration file was written to
+`/rootfs/usr/local/lib/modprobe.d/nvidia-tegra.conf` inside the nvgpu extension.
+kmod searches the following standard paths for `modprobe.d` files:
+- `/usr/lib/modprobe.d/`
+- `/lib/modprobe.d/`
+- `/etc/modprobe.d/`
+- `/run/modprobe.d/`
+
+`/usr/local/lib/modprobe.d/` is **not** in the standard search path — kmod silently
+ignores it. As a result, the `softdep` was never effective: when nvgpu was loaded
+(triggered by its udev alias), modprobe made no effort to load nvmap and mc-utils
+first. nvgpu probed, found missing symbols, and aborted.
+
+**Fix**: In `nvidia-tegra-nvgpu/pkg.yaml`, changed the modprobe.d path:
+```diff
+-          > /rootfs/usr/local/lib/modprobe.d/nvidia-tegra.conf
+-          >> /rootfs/usr/local/lib/modprobe.d/nvidia-tegra.conf
++        mkdir -p /rootfs/usr/lib/modprobe.d
++          > /rootfs/usr/lib/modprobe.d/nvidia-tegra.conf
++          >> /rootfs/usr/lib/modprobe.d/nvidia-tegra.conf
+```
+
+`NVGPU_VERSION` bumped `5.1.0 → 5.2.0` in `common.sh` to force a clean rebuild
+of the nvgpu extension so the corrected path is included in the new image.
+
+**Expected outcome (run 20)**: kmod reads the softdep at boot; when udev triggers
+nvgpu's alias, modprobe loads `host1x`, `nvmap`, `host1x-fence`, `mc-utils` first,
+then nvgpu — all missing-symbol errors should disappear.

@@ -381,10 +381,11 @@ steps:
         # Load order:
         # host1x (OOT version from extra/ overrides in-kernel; exports host1x_fence_extract) first,
         # then mc-utils and host1x-fence, then nvmap, then nvgpu.
+        mkdir -p /rootfs/usr/lib/modprobe.d
         printf 'softdep nvgpu pre: host1x nvmap host1x-fence mc-utils\n' \
-          > /rootfs/usr/local/lib/modprobe.d/nvidia-tegra.conf
+          > /rootfs/usr/lib/modprobe.d/nvidia-tegra.conf
         printf 'softdep host1x-fence pre: host1x\n' \
-          >> /rootfs/usr/local/lib/modprobe.d/nvidia-tegra.conf
+          >> /rootfs/usr/lib/modprobe.d/nvidia-tegra.conf
 
         # Also export vmlinuz.efi + signing key so the build script can build
         # custom-installer without a separate 4.72 GB kernel-build export step.
