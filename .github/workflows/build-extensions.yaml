@@ -141,16 +141,22 @@ jobs:
           FW_TMP=$(mktemp -d)
           trap 'rm -rf "${FW_TMP}"' EXIT
 
-          echo "Fetching L4T r36 package index..."
-          INDEX_URL="https://repo.download.nvidia.com/jetson/common/dists/r36/main/binary-arm64/Packages.gz"
-          curl -fsSL "${INDEX_URL}" | gunzip > "${FW_TMP}/Packages"
-
-          # Extract the Filename: line for nvidia-l4t-firmware
-          # The Packages file lists all versions; pick the one matching 36.5.x
-          PKG_PATH=$(awk '/^Package: nvidia-l4t-firmware$/{found=1} found && /^Filename:/{print $2; exit}' \
-            "${FW_TMP}/Packages")
-          [[ -n "${PKG_PATH}" ]] || { echo "ERROR: nvidia-l4t-firmware not found in L4T r36 index"; exit 1; }
-          echo "Package: ${PKG_PATH}"
+          # NVIDIA Jetson apt repo: distribution name is the full minor version (r36.5),
+          # not just the major (r36). Try r36.5 first, then r36.4.3 as fallback.
+          PKG_PATH=""
+          for DIST in r36.5 r36.5.0 r36.4.3 r36; do
+            INDEX_URL="https://repo.download.nvidia.com/jetson/common/dists/${DIST}/main/binary-arm64/Packages.gz"
+            echo "Trying L4T distribution: ${DIST} ..."
+            if curl -fsSL --max-time 15 "${INDEX_URL}" | gunzip > "${FW_TMP}/Packages" 2>/dev/null \
+                && grep -q "^Package: nvidia-l4t-firmware$" "${FW_TMP}/Packages"; then
+              echo "Found package index at distribution: ${DIST}"
+              PKG_PATH=$(awk '/^Package: nvidia-l4t-firmware$/{found=1} found && /^Filename:/{print $2; exit}' \
+                "${FW_TMP}/Packages")
+              break
+            fi
+          done
+          [[ -n "${PKG_PATH}" ]] || { echo "ERROR: nvidia-l4t-firmware not found in any L4T distribution"; exit 1; }
+          echo "Package path: ${PKG_PATH}"
 
           curl -fsSL "https://repo.download.nvidia.com/jetson/common/${PKG_PATH}" \
             -o "${FW_TMP}/nvidia-l4t-firmware.deb"
