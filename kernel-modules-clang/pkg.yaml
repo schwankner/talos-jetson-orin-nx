@@ -2,6 +2,7 @@ name: kernel-modules-clang
 variant: scratch
 shell: /bin/bash
 dependencies:
+  - stage: base
   - stage: kernel-build
 steps:
   - install:
