@@ -27,7 +27,6 @@ source "$(dirname "$0")/common.sh"
 
 TALOS_PKGS_DIR="${TALOS_PKGS_DIR:-/tmp/talos-pkgs}"
 NVGPU_OUT_DIR="${NVGPU_OUT:-/tmp/nvgpu-${NVGPU_VERSION}-output}"
-KERNEL_OUT_DIR="${KERNEL_OUT:-/tmp/kernel-${NVGPU_VERSION}-output}"
 KERNEL_MODULES_OUT_DIR="${KERNEL_MODULES_OUT:-/tmp/kernel-modules-clang-${KERNEL_MODULES_VERSION}-output}"
 BUILD_LOG="/tmp/nvgpu-build-${NVGPU_VERSION}.log"
 
@@ -83,7 +82,6 @@ CACHE_TAG_KERNEL="kernel-${TALOS_VERSION}-k${KERNEL_VERSION}"
 CACHE_TAG_KM_CLANG="kernel-modules-clang-${KERNEL_MODULES_VERSION}-k${KERNEL_VERSION}"
 CACHE_FROM_NVGPU=()
 CACHE_TO_NVGPU=()
-CACHE_FROM_KERNEL=()
 CACHE_TO_KERNEL=()
 CACHE_FROM_KM_CLANG=()
 CACHE_TO_KM_CLANG=()
@@ -95,11 +93,8 @@ if [[ -n "${CACHE_REGISTRY}" ]]; then
   CACHE_TO_NVGPU=(
     "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU},mode=min"
   )
-  # Kernel cache: used as --cache-from in the nvgpu build so kernel steps
-  # are cache hits. Populated on the first successful nvgpu cold build.
-  CACHE_FROM_KERNEL=(
-    "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL}"
-  )
+  # Kernel cache (mode=max): populated by the nvgpu build via --cache-to so all
+  # intermediate kernel layers are available as cache hits for subsequent builds.
   CACHE_TO_KERNEL=(
     "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL},mode=max"
   )
