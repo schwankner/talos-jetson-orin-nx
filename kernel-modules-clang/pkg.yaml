@@ -1,0 +1,36 @@
+name: kernel-modules-clang
+variant: scratch
+shell: /bin/bash
+dependencies:
+  - stage: kernel-build
+steps:
+  - install:
+      - |
+        KERNEL_RELEASE=$(cat /src/include/config/kernel.release)
+        echo "Packaging Clang-compiled in-tree kernel modules for ${KERNEL_RELEASE}..."
+
+        # Copy all signed .ko files from the kernel source tree, preserving
+        # directory structure under /usr/lib/modules/${KERNEL_RELEASE}/kernel/.
+        # In-tree modules are already signed with CONFIG_MODULE_SIG_KEY during
+        # the kernel-build stage — no re-signing is needed here.
+        mkdir -p "/rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel"
+
+        cd /src
+        find . -name "*.ko" | while IFS= read -r ko; do
+          ko="${ko#./}"
+          dest="/rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/$(dirname "${ko}")"
+          mkdir -p "${dest}"
+          install -m 644 "${ko}" "${dest}/"
+        done
+
+        # Copy module metadata files (used by modprobe, depmod, etc.)
+        for f in modules.builtin modules.order modules.builtin.modinfo; do
+          [ -f "/src/${f}" ] && \
+            cp "/src/${f}" "/rootfs/usr/lib/modules/${KERNEL_RELEASE}/${f}" || true
+        done
+
+        KO_COUNT=$(find /rootfs/usr/lib/modules -name "*.ko" | wc -l)
+        echo "Packaged ${KO_COUNT} in-tree Clang modules for kernel ${KERNEL_RELEASE}"
+finalize:
+  - from: /rootfs
+    to: /rootfs

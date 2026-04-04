@@ -28,6 +28,7 @@ source "$(dirname "$0")/common.sh"
 TALOS_PKGS_DIR="${TALOS_PKGS_DIR:-/tmp/talos-pkgs}"
 NVGPU_OUT_DIR="${NVGPU_OUT:-/tmp/nvgpu-${NVGPU_VERSION}-output}"
 KERNEL_OUT_DIR="${KERNEL_OUT:-/tmp/kernel-${NVGPU_VERSION}-output}"
+KERNEL_MODULES_OUT_DIR="${KERNEL_MODULES_OUT:-/tmp/kernel-modules-clang-${KERNEL_MODULES_VERSION}-output}"
 BUILD_LOG="/tmp/nvgpu-build-${NVGPU_VERSION}.log"
 
 check_docker
@@ -79,10 +80,13 @@ cd "${TALOS_PKGS_DIR}"
 # nvgpu cache would redundantly re-upload 4.72 GB of kernel data every build.
 CACHE_TAG_NVGPU="nvgpu-${NVGPU_VERSION}-k${KERNEL_VERSION}"
 CACHE_TAG_KERNEL="kernel-${TALOS_VERSION}-k${KERNEL_VERSION}"
+CACHE_TAG_KM_CLANG="kernel-modules-clang-${KERNEL_MODULES_VERSION}-k${KERNEL_VERSION}"
 CACHE_FROM_NVGPU=()
 CACHE_TO_NVGPU=()
 CACHE_FROM_KERNEL=()
 CACHE_TO_KERNEL=()
+CACHE_FROM_KM_CLANG=()
+CACHE_TO_KM_CLANG=()
 if [[ -n "${CACHE_REGISTRY}" ]]; then
   CACHE_FROM_NVGPU=(
     "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU}"
@@ -98,6 +102,15 @@ if [[ -n "${CACHE_REGISTRY}" ]]; then
   )
   CACHE_TO_KERNEL=(
     "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL},mode=max"
+  )
+  # kernel-modules-clang cache: reuses kernel cache as --cache-from (no kernel rebuild),
+  # then caches its own small final layer with mode=min.
+  CACHE_FROM_KM_CLANG=(
+    "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KM_CLANG}"
+    "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL}"
+  )
+  CACHE_TO_KM_CLANG=(
+    "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KM_CLANG},mode=min"
   )
   info "BuildKit registry cache: ${CACHE_REGISTRY}"
 else
@@ -128,11 +141,35 @@ else
   info "Step 2: Skipped (KERNEL_ONLY=1)"
 fi
 
+# ── Step 3: BuildKit build — kernel-modules-clang ─────────────────────────────
+# Packages ALL in-tree kernel modules (already signed with talos_signing_key.pem
+# during kernel-build) into an OCI extension. Reuses the cached kernel-build
+# layers populated by Step 2 above, so this should take only a few minutes.
+# Run unconditionally — even in KERNEL_ONLY mode the modules change with the kernel.
+info "Step 3: Building kernel-modules-clang ${KERNEL_MODULES_VERSION} (in-tree Clang modules)..."
+info "    Log: ${BUILD_LOG}"
+mkdir -p "${KERNEL_MODULES_OUT_DIR}"
+
+docker buildx build \
+  --builder talos-builder \
+  --file Pkgfile \
+  --target kernel-modules-clang \
+  --platform linux/arm64 \
+  "${CACHE_FROM_KM_CLANG[@]}" \
+  "${CACHE_TO_KM_CLANG[@]}" \
+  --output "type=local,dest=${KERNEL_MODULES_OUT_DIR}" \
+  . 2>&1 | tee -a "${BUILD_LOG}"
+
+[[ -d "${KERNEL_MODULES_OUT_DIR}/rootfs/usr/lib/modules" ]] \
+  || error "kernel-modules-clang: no modules directory found in build output!"
+KM_COUNT=$(find "${KERNEL_MODULES_OUT_DIR}/rootfs/usr/lib/modules" -name "*.ko" | wc -l)
+info "    kernel-modules-clang: ${KM_COUNT} modules packaged"
+
 # ── Step 4: Extract vmlinuz + signing key from nvgpu build output ─────────────
 # vmlinuz.efi and the signing key are now exported by the nvgpu build itself
 # (install section copies them to /rootfs/kernel/). No separate 4.72 GB
 # kernel-build export needed.
-info "Step 3: Locating vmlinuz.efi from nvgpu build output..."
+info "Step 4: Locating vmlinuz.efi from nvgpu build output..."
 
 VMLINUZ_SRC="${NVGPU_OUT_DIR}/rootfs/kernel/vmlinuz.efi"
 [[ -f "${VMLINUZ_SRC}" ]] || error "vmlinuz.efi not found at ${VMLINUZ_SRC}"
@@ -154,7 +191,7 @@ info "    Key verified: kernel serial ${KERNEL_KEY_SERIAL} matches keys/signing_
 # ── Step 5: Rebuild custom-installer with the new vmlinuz ──────────────────────
 # This ensures the kernel embedded in the UKI has the SAME signing key as
 # the nvgpu modules. Skipping this step would cause module rejection on boot.
-info "Step 4: Rebuilding custom-installer with new vmlinuz..."
+info "Step 5: Rebuilding custom-installer with new vmlinuz..."
 INSTALLER_BUILD_DIR=$(mktemp -d)
 trap 'rm -rf "${INSTALLER_BUILD_DIR}"' EXIT
 
@@ -208,6 +245,39 @@ EXTEOF
 else
   info "Step 5: Skipped (KERNEL_ONLY=1) — nvgpu extension already in registry"
 fi
+
+# ── Step 6: Package kernel-modules-clang as OCI extension ─────────────────────
+info "Step 6: Packaging kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos..."
+KM_BUILD_DIR=$(mktemp -d)
+trap 'rm -rf "${INSTALLER_BUILD_DIR}" "${EXT_BUILD_DIR:-}" "${KM_BUILD_DIR}"' EXIT
+
+cat > "${KM_BUILD_DIR}/manifest.yaml" << EOF
+version: v1alpha1
+metadata:
+  name: kernel-modules-clang
+  version: ${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos
+  author: custom-build
+  description: In-tree kernel modules compiled with Clang and signed with the custom module signing key
+  compatibility:
+    talos:
+      version: ">= 1.12.6"
+EOF
+
+cat > "${KM_BUILD_DIR}/Dockerfile" << 'KMEOF'
+FROM scratch
+COPY manifest.yaml /manifest.yaml
+COPY rootfs /rootfs
+KMEOF
+
+cp -r "${KERNEL_MODULES_OUT_DIR}/rootfs" "${KM_BUILD_DIR}/rootfs"
+
+docker buildx build \
+  --platform linux/arm64 \
+  -t "${REGISTRY_DOCKER}/kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos" \
+  --push \
+  "${KM_BUILD_DIR}/"
+
+info "    kernel-modules-clang pushed: ${REGISTRY_DOCKER}/kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos"
 
 # ── Done ────────────────────────────────────────────────────────────────────────
 info ""
