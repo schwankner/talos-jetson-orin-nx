@@ -30,8 +30,36 @@ steps:
             cp "/src/${f}" "/rootfs/usr/lib/modules/${KERNEL_RELEASE}/${f}" || true
         done
 
+        # Sign all in-tree modules with the kernel's own signing key.
+        # CONFIG_MODULE_SIG_ALL is not guaranteed to sign .ko files during the
+        # bldr build (key may be absent at compile time). Signing here explicitly
+        # ensures every module matches the key embedded in the running kernel.
+        # Try talos_signing_key.pem (our fixed key) first; fall back to the
+        # auto-generated signing_key.pem produced by the kernel-build stage.
+        if [ -f /src/certs/talos_signing_key.pem ] && [ -f /src/certs/talos_signing_key.x509 ]; then
+          SIG_KEY=/src/certs/talos_signing_key.pem
+          SIG_CERT=/src/certs/talos_signing_key.x509
+          echo "Signing with fixed talos_signing_key.pem"
+        elif [ -f /src/certs/signing_key.pem ] && [ -f /src/certs/signing_key.x509 ]; then
+          SIG_KEY=/src/certs/signing_key.pem
+          SIG_CERT=/src/certs/signing_key.x509
+          echo "Signing with kernel-generated signing_key.pem"
+        else
+          echo "ERROR: no signing key found in /src/certs/ — modules will be unsigned!" >&2
+          SIG_KEY=""
+        fi
+
+        if [ -n "${SIG_KEY}" ]; then
+          SIGNED=0
+          find /rootfs/usr/lib/modules -name "*.ko" | while read -r ko; do
+            /src/scripts/sign-file sha512 "${SIG_KEY}" "${SIG_CERT}" "${ko}"
+            SIGNED=$((SIGNED + 1))
+          done
+          echo "Signed in-tree modules with $(basename ${SIG_KEY})"
+        fi
+
         KO_COUNT=$(find /rootfs/usr/lib/modules -name "*.ko" | wc -l)
-        echo "Packaged ${KO_COUNT} in-tree Clang modules for kernel ${KERNEL_RELEASE}"
+        echo "Packaged ${KO_COUNT} in-tree modules for kernel ${KERNEL_RELEASE}"
 finalize:
   - from: /rootfs
     to: /rootfs
