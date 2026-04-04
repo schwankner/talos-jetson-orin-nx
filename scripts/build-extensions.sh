@@ -71,9 +71,12 @@ fi
 cd "${TALOS_PKGS_DIR}"
 
 # ── Build cache args (populated when CACHE_REGISTRY is set) ───────────────────
-# mode=max caches ALL intermediate layers (kernel-build, llvm, base, etc.).
-# When only nvgpu OOT sources change, the kernel compile (~40 min) is served
-# from the registry cache and the whole build drops to ~15–20 min.
+# Kernel cache: mode=max to cache ALL intermediate kernel layers (4.72 GB) —
+# needed so the kernel compile is a fast registry cache hit on nvgpu rebuilds.
+#
+# nvgpu cache: mode=min — only caches the final .ko output layer (small).
+# The kernel layers are served via --cache-from kernel tag, so mode=max on the
+# nvgpu cache would redundantly re-upload 4.72 GB of kernel data every build.
 CACHE_TAG_NVGPU="nvgpu-${NVGPU_VERSION}-k${KERNEL_VERSION}"
 CACHE_TAG_KERNEL="kernel-${TALOS_VERSION}-k${KERNEL_VERSION}"
 CACHE_FROM_NVGPU=()
@@ -86,11 +89,10 @@ if [[ -n "${CACHE_REGISTRY}" ]]; then
     "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL}"
   )
   CACHE_TO_NVGPU=(
-    "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU},mode=max"
+    "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU},mode=min"
   )
   CACHE_FROM_KERNEL=(
     "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL}"
-    "--cache-from" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU}"
   )
   CACHE_TO_KERNEL=(
     "--cache-to" "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL},mode=max"
@@ -123,30 +125,42 @@ else
   info "Step 2: Skipped (KERNEL_ONLY=1)"
 fi
 
-# ── Step 4: Extract vmlinuz from kernel-build ─────────────────────────────────
-# The nvidia-tegra-nvgpu build above already compiled the kernel internally.
-# With registry cache (mode=max), all kernel layers are already cached —
-# this second buildx call just re-exports the kernel output (~30 sec vs ~40 min).
-# Without cache it rebuilds the kernel again; consider using KERNEL_ONLY=1 to avoid.
-info "Step 3: Extracting vmlinuz from kernel-build (cache hit: ~30 sec)..."
+# ── Step 4: Extract vmlinuz + signing key from kernel-build ───────────────────
+# Use a tiny wrapper Dockerfile that copies ONLY vmlinuz.efi and the signing key
+# from the cached kernel-build layer → exports a few MB instead of 4.72 GB.
+info "Step 3: Extracting vmlinuz.efi from kernel-build (cache hit, tiny export)..."
 mkdir -p "${KERNEL_OUT_DIR}"
+
+KERNEL_VMLINUZ_DOCKERFILE=$(mktemp --suffix=.dockerfile)
+trap 'rm -f "${KERNEL_VMLINUZ_DOCKERFILE}"' EXIT
+cat > "${KERNEL_VMLINUZ_DOCKERFILE}" << 'KEOF'
+# syntax=docker/dockerfile:1
+FROM kernel-build AS kernel-vmlinuz-extract
+RUN mkdir -p /vmlinuz-out && \
+    cp /src/arch/arm64/boot/vmlinuz.efi /vmlinuz-out/ && \
+    cp /src/certs/talos_signing_key.x509 /vmlinuz-out/ 2>/dev/null || true && \
+    cp /src/certs/signing_key.x509 /vmlinuz-out/kernel_signing_key.x509 2>/dev/null || true
+FROM scratch
+COPY --from=kernel-vmlinuz-extract /vmlinuz-out /
+KEOF
 
 docker buildx build \
   --builder talos-builder \
-  --file Pkgfile \
-  --target kernel-build \
+  --file "${KERNEL_VMLINUZ_DOCKERFILE}" \
   --platform linux/arm64 \
   "${CACHE_FROM_KERNEL[@]}" \
   "${CACHE_TO_KERNEL[@]}" \
   --output "type=local,dest=${KERNEL_OUT_DIR}" \
-  . 2>&1 | tee "${BUILD_LOG}.kernel"
+  "${TALOS_PKGS_DIR}" 2>&1 | tee "${BUILD_LOG}.kernel"
 
-VMLINUZ_SRC="${KERNEL_OUT_DIR}/src/arch/arm64/boot/vmlinuz.efi"
+VMLINUZ_SRC="${KERNEL_OUT_DIR}/vmlinuz.efi"
 [[ -f "${VMLINUZ_SRC}" ]] || error "vmlinuz.efi not found in kernel output at ${VMLINUZ_SRC}"
 info "    vmlinuz.efi: $(ls -lh ${VMLINUZ_SRC} | awk '{print $5}')"
 
 # Verify the kernel embedded the correct key
-KERNEL_KEY_SERIAL=$(openssl x509 -in "${KERNEL_OUT_DIR}/src/certs/talos_signing_key.x509" \
+KERNEL_KEY_SERIAL=$(openssl x509 -in "${KERNEL_OUT_DIR}/talos_signing_key.x509" \
+  -noout -serial 2>/dev/null | cut -d= -f2 || \
+  openssl x509 -in "${KERNEL_OUT_DIR}/kernel_signing_key.x509" \
   -noout -serial 2>/dev/null | cut -d= -f2 || echo "UNKNOWN")
 EXPECTED_SERIAL=$(openssl x509 -in "${REPO_ROOT}/keys/signing_key.x509" -noout -serial | cut -d= -f2)
 if [[ "${KERNEL_KEY_SERIAL}" != "${EXPECTED_SERIAL}" ]]; then
