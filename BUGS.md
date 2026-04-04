@@ -232,6 +232,132 @@ The custom device plugin source is at `plugins/jetson-device-plugin/main.go`.
 
 ---
 
+## Bug 10 — GCC 15 / Clang 22 Toolchain Mismatch in Kernel 6.18 OOT Build
+
+**Symptom**: OOT module (`nvgpu.ko`) build fails with a cascade of errors:
+
+```
+clang: error: unknown argument: '-fmin-function-alignment=8'
+clang: error: unknown argument: '-fconserve-stack'
+drivers/gpu/nvgpu/…: error: use of undeclared identifier 'latent_entropy'
+include/linux/vmstat.h:…: error: implicit conversion changes signedness ('unsigned long' to 'long')
+```
+
+**Root cause (layered)**:
+
+1. **GCC-only flags leak into Clang OOT build.** Linux 6.18's top-level
+   `Makefile` contains several `$(if $(CONFIG_*), -flag)` expressions that
+   are **not** gated on `CONFIG_CC_IS_GCC`. When the *kernel* was compiled
+   with GCC these options are stored in `auto.conf` and then unconditionally
+   exported as `$(KBUILD_CFLAGS)` for any OOT module build — even when the
+   OOT module uses `LLVM=1` (Clang):
+
+   | Flag | Source | Problem |
+   |---|---|---|
+   | `-fmin-function-alignment=8` | `CONFIG_FUNCTION_ALIGNMENT` | GCC-only |
+   | `-fconserve-stack` | `CONFIG_FRAME_WARN` | GCC-only |
+   | `-fsanitize=bounds-strict` | UBSAN config | Clang only has `-fsanitize=bounds` |
+   | `-Wimplicit-fallthrough=5` | `KBUILD_WFLAGS` | Clang uses `-Wimplicit-fallthrough` (no value) |
+   | `-Wno-maybe-uninitialized` | `cc-option` probe | Clang uses `-Wno-uninitialized` |
+   | `-Wno-alloc-size-larger-than` | `cc-option` probe | Clang doesn't have this flag |
+   | `-fplugin=stackleak_plugin.so` | `CONFIG_GCC_PLUGIN_STACKLEAK` | GCC plugins don't exist in Clang |
+   | `-Wgnu-variable-sized-type-not-at-end` | `cgroup-defs.h` include | Clang 22 new default warning |
+   | `-Wenum-enum-conversion` | `vmstat.h` implicit conversion | Clang 22 new default warning |
+
+2. **`latent_entropy` undeclared.** `CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y` in
+   the GCC kernel build causes the GCC plugin to inject a global `latent_entropy`
+   variable declaration into `autoconf.h`. When Clang builds OOT modules, it
+   includes `autoconf.h` (via `-include include/generated/autoconf.h`) and then
+   hits references to this variable in `drivers/net/` and other subsystems.
+   Passing `-UCONFIG_GCC_PLUGIN_LATENT_ENTROPY` on the command line does **not**
+   help because `-include autoconf.h` is processed after all `-U` flags.
+
+**Fix — `clang-oot` wrapper** (in `nvidia-tegra-nvgpu/pkg.yaml`):
+
+A shell script at `/usr/local/bin/clang-oot` intercepts every compiler
+invocation and filters GCC-specific flags before calling real `clang`. Trailing
+overrides (`-Wno-*`) come **after** `${filtered[@]}` so they win over flags that
+the kernel build system injects mid-compile:
+
+```bash
+case "$arg" in
+  -fmin-function-alignment=*|-fconserve-stack) ;;        # drop
+  -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;
+  -Wimplicit-fallthrough=*) filtered+=("-Wimplicit-fallthrough") ;;
+  -Wno-maybe-uninitialized) filtered+=("-Wno-uninitialized") ;;
+  -Wno-alloc-size-larger-than|-Wno-alloc-size-larger-than=*) ;;
+  -fplugin=*|-fplugin-arg-*) ;;
+  *) filtered+=("$arg") ;;
+esac
+exec clang "${filtered[@]}" \
+  -Wno-unknown-warning-option \
+  -Wno-enum-enum-conversion \
+  -Wno-implicit-fallthrough \
+  -Wno-gnu-variable-sized-type-not-at-end
+```
+
+For `latent_entropy`: the `autoconf.h` and `auto.conf` files are patched
+in-place before `make` runs:
+
+```bash
+sed -i '/CONFIG_GCC_PLUGIN_LATENT_ENTROPY/d' /src/include/config/auto.conf
+sed -i '/CONFIG_GCC_PLUGIN_LATENT_ENTROPY/d' /src/include/generated/autoconf.h
+```
+
+**Note**: The wrapper is created twice in `pkg.yaml` (once in the `nvidia-oot`
+build step, once in the `nvgpu` build step). This is intentional: BuildKit
+layer caching can cause the nvgpu step to run in a container that never ran the
+nvidia-oot step, so the wrapper must be idempotent and self-contained.
+
+---
+
+## Bug 11 — CI: Extension Images Were Never Pushed to ghcr.io
+
+**Symptom**: UKI assembly fails:
+
+```
+error pulling image ghcr.io/schwankner/kernel-modules-clang:1.1.0-6.18.18-talos: DENIED
+error pulling image ghcr.io/schwankner/nvidia-firmware-ext:v5: DENIED
+```
+
+**Root cause**: Three extension images existed only in the local OCI registry
+(`192.168.1.100:5001`) and were never built or pushed in CI:
+
+| Image | Problem |
+|---|---|
+| `kernel-modules-clang` | No bldr package existed; in-tree modules were never packaged as an extension |
+| `nvidia-firmware-ext` | Built manually once, pushed only to local registry; no CI step |
+
+The Talos imager runs inside a Docker container and can pull from ghcr.io
+authenticated by the host's Docker credentials — but only if those credentials
+are mounted into the container (`-v ~/.docker/config.json:/root/.docker/config.json:ro`).
+Even with that fix, images that don't exist in ghcr.io at all cannot be pulled.
+
+**Fix — `kernel-modules-clang`**:
+
+New bldr package `kernel-modules-clang/pkg.yaml` (depends on `base` +
+`kernel-build`). The `kernel-build` stage already signs all in-tree `.ko` files
+with `talos_signing_key.pem`. The new package simply copies them into
+`/rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/` — no re-signing needed.
+
+`build-extensions.sh` builds and pushes this image as a new Step 3, reusing
+the already-cached `kernel-build` layers (only a few extra minutes).
+
+**Fix — `nvidia-firmware-ext`**:
+
+New CI step in `build-extensions.yaml` that:
+1. Queries the NVIDIA L4T r36.5 apt repo (`t234` component, not `common`) to
+   find `nvidia-l4t-firmware_36.5.0-*.deb`
+2. Downloads the `.deb` directly (no apt-key or sudo needed)
+3. Extracts firmware files with `dpkg-deb --extract`
+4. Locates `ga10b/` with `find` (path varies by package version)
+5. Packages them as a Talos OCI extension and pushes to ghcr.io
+
+**Key lesson**: NVIDIA L4T apt packages are split across board-specific repos.
+`nvidia-l4t-firmware` is in `t234` (Orin-specific), not in `common`.
+
+---
+
 ## Bug 9 — UBSAN: array-index-out-of-bounds in netlist.c (Non-fatal)
 
 **Symptom** (every boot, non-fatal):
