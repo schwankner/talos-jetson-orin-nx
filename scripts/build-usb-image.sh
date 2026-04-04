@@ -68,29 +68,31 @@ LEOF
 
 else
   # ── Linux: use losetup + dosfstools ──────────────────────────────────────
+  # losetup / mkfs.fat / mount require root; dd + parted operate on a regular
+  # file and work without privileges. GitHub Actions runners have passwordless sudo.
   IMG="${USB_OUT}"
   dd if=/dev/zero of="${IMG}" bs=1M count="${USB_SIZE_MB}" status=none
 
-  # MBR with single FAT32 partition
+  # MBR with single FAT32 partition (parted writes to the file — no root needed)
   parted -s "${IMG}" mklabel msdos
   parted -s "${IMG}" mkpart primary fat32 1MiB 100%
   parted -s "${IMG}" set 1 boot on
 
-  LOOP=$(losetup -f --show -P "${IMG}")
-  mkfs.fat -F 32 -n TALOSBOOT "${LOOP}p1"
+  LOOP=$(sudo losetup -f --show -P "${IMG}")
+  sudo mkfs.fat -F 32 -n TALOSBOOT "${LOOP}p1"
 
   MNT=$(mktemp -d)
-  mount "${LOOP}p1" "${MNT}"
+  sudo mount "${LOOP}p1" "${MNT}"
 
-  mkdir -p "${MNT}/EFI/BOOT" "${MNT}/loader"
-  cp "${UKI_PATH}" "${MNT}/EFI/BOOT/BOOTAA64.EFI"
-  cat > "${MNT}/loader/loader.conf" <<'LEOF'
+  sudo mkdir -p "${MNT}/EFI/BOOT" "${MNT}/loader"
+  sudo cp "${UKI_PATH}" "${MNT}/EFI/BOOT/BOOTAA64.EFI"
+  sudo tee "${MNT}/loader/loader.conf" > /dev/null <<'LEOF'
 default BOOTAA64.EFI
 timeout 5
 LEOF
 
-  umount "${MNT}"
-  losetup -d "${LOOP}"
+  sudo umount "${MNT}"
+  sudo losetup -d "${LOOP}"
   rm -rf "${MNT}"
 fi
 
