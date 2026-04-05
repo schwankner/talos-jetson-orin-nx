@@ -28,7 +28,7 @@ LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
 LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.4.0}"          # .../ 5.3.0 (loud errors) / 5.4.0 (fix latent_entropy Clang error in OOT host1x)
+NVGPU_VERSION="${NVGPU_VERSION:-5.5.0}"          # .../ 5.4.0 (latent_entropy fix) / 5.5.0 (strip -pg/-mrecord-mcount: fix ftrace panic on nvmap load)
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 
