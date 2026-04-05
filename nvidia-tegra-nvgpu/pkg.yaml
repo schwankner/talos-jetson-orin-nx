@@ -58,6 +58,15 @@ steps:
         NVIDIA_OOT=/oot-src/nvidia-oot
         CONFTEST_OUT=/oot-src/out/nvidia-conftest
 
+        # ── GCC plugin latent_entropy fix ────────────────────────────────────────────
+        # CONFIG_GCC_PLUGIN_LATENT_ENTROPY injects a global 'latent_entropy' variable
+        # via a GCC plugin. Clang doesn't run the plugin → 'latent_entropy' is undeclared
+        # → linux/random.h:24 compile error for ALL OOT modules.
+        # Fix: strip the macro from auto.conf and autoconf.h before any OOT build.
+        sed -i '/CONFIG_GCC_PLUGIN_LATENT_ENTROPY/d' /src/include/config/auto.conf 2>/dev/null || true
+        sed -i '/CONFIG_GCC_PLUGIN_LATENT_ENTROPY/d' /src/include/generated/autoconf.h 2>/dev/null || true
+        echo "Removed CONFIG_GCC_PLUGIN_LATENT_ENTROPY (Clang compat fix)"
+
         # OOT host1x: add conftest + nvidia-oot includes (exports host1x_fence_extract)
         printf 'ccflags-y += -I$(srctree.nvconftest)\n' \
           >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
