@@ -200,7 +200,7 @@ steps:
           srctree.nvconftest=${NVIDIA_CONFTEST} \
           LLVM=1 \
           KBUILD_MODPOST_WARN=1 \
-          modules 2>&1 && echo "OOT host1x: OK" || echo "OOT host1x: FAILED (continuing)"
+          modules 2>&1 | tee /tmp/build-host1x.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "OOT host1x: OK" || { echo "OOT host1x: BUILD FAILED (see errors above)"; exit 1; }
         cat ${NVIDIA_OOT}/drivers/gpu/host1x/Module.symvers \
           >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
 
@@ -214,7 +214,7 @@ steps:
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
           LLVM=1 \
-          modules 2>&1 && echo "mc-utils: OK" || echo "mc-utils: FAILED (continuing)"
+          modules 2>&1 | tee /tmp/build-mc-utils.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "mc-utils: OK" || { echo "mc-utils: BUILD FAILED (see errors above)"; exit 1; }
         cat ${NVIDIA_OOT}/drivers/platform/tegra/mc-utils/Module.symvers \
           >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
 
@@ -241,7 +241,7 @@ steps:
           srctree.nvconftest=${NVIDIA_CONFTEST} \
           LLVM=1 \
           KBUILD_EXTRA_SYMBOLS=/oot-src/out/nvidia-linux-header/Module.symvers.nvidia \
-          modules 2>&1 && echo "host1x-fence: OK" || echo "host1x-fence: FAILED (continuing)"
+          modules 2>&1 | tee /tmp/build-host1x-fence.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "host1x-fence: OK" || { echo "host1x-fence: BUILD FAILED (see errors above)"; exit 1; }
         cat ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Module.symvers \
           >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
 
@@ -260,7 +260,7 @@ steps:
           NVMAP_CONFIG_PAGE_POOLS=y \
           NVMAP_CONFIG_HANDLE_AS_ID=n \
           NVMAP_CONFIG_SCIIPC=n \
-          modules 2>&1 && echo "nvmap: OK" || echo "nvmap: FAILED (continuing)"
+          modules 2>&1 | tee /tmp/build-nvmap.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "nvmap: OK" || { echo "nvmap: BUILD FAILED (see errors above)"; exit 1; }
         cat ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Module.symvers \
           >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
 
