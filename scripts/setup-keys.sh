@@ -65,7 +65,10 @@ if [[ ! -f "${KEY_PEM}" ]]; then
   info "Keys saved to: ${KEYS_DIR}/"
   warn "Rebuild kernel + all extensions to embed the new key!"
 else
-  SERIAL=$(openssl x509 -in "${KEY_X509}" -noout -serial 2>/dev/null | cut -d= -f2)
+  # signing_key.x509 may be DER (kernel-generated) or PEM — try both
+  SERIAL=$(openssl x509 -in "${KEY_X509}" -inform DER -noout -serial 2>/dev/null | cut -d= -f2 \
+    || openssl x509 -in "${KEY_X509}" -noout -serial 2>/dev/null | cut -d= -f2 \
+    || true)
   info "Using existing signing key: serial=${SERIAL}"
 fi
 

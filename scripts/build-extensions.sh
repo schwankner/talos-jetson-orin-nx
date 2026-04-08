@@ -44,7 +44,7 @@ info "    Talos ${TALOS_VERSION}, kernel ${KERNEL_VERSION}"
 #   kernel/build/certs/talos_signing_key.pem  (kernel embeds it via CONFIG_MODULE_SIG_KEY)
 #   nvidia-tegra-nvgpu/signing_key.pem        (nvgpu pkg.yaml signs modules with it)
 # CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem" ensures make never auto-overwrites it.
-info "Step 1: Setting up signing keys (serial: $(openssl x509 -in ${REPO_ROOT}/keys/signing_key.x509 -noout -serial 2>/dev/null | cut -d= -f2))..."
+info "Step 1: Setting up signing keys (serial: $(openssl x509 -in ${REPO_ROOT}/keys/signing_key.x509 -inform DER -noout -serial 2>/dev/null | cut -d= -f2))..."
 bash "$(dirname "$0")/setup-keys.sh"
 
 # ── Step 2: Verify talos-pkgs is set up ──────────────────────────────────────
@@ -175,7 +175,8 @@ KERNEL_KEY_SERIAL=$(openssl x509 -in "${NVGPU_OUT_DIR}/rootfs/kernel/talos_signi
   -noout -serial 2>/dev/null | cut -d= -f2 || \
   openssl x509 -in "${NVGPU_OUT_DIR}/rootfs/kernel/signing_key.x509" \
   -noout -serial 2>/dev/null | cut -d= -f2 || echo "UNKNOWN")
-EXPECTED_SERIAL=$(openssl x509 -in "${REPO_ROOT}/keys/signing_key.x509" -noout -serial | cut -d= -f2)
+EXPECTED_SERIAL=$(openssl x509 -in "${REPO_ROOT}/keys/signing_key.x509" -inform DER -noout -serial 2>/dev/null | cut -d= -f2 \
+  || openssl x509 -in "${REPO_ROOT}/keys/signing_key.x509" -noout -serial 2>/dev/null | cut -d= -f2)
 if [[ "${KERNEL_KEY_SERIAL}" != "${EXPECTED_SERIAL}" ]]; then
   error "KEY MISMATCH: kernel has ${KERNEL_KEY_SERIAL}, expected ${EXPECTED_SERIAL}
   This should never happen with CONFIG_MODULE_SIG_KEY=certs/talos_signing_key.pem.
