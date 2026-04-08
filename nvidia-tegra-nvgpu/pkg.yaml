@@ -338,8 +338,8 @@ steps:
           CC=/usr/local/bin/clang-oot \
           CONFIG_TEGRA_OOT_MODULE=m \
           CONFIG_GK20A=m \
-          CONFIG_TEGRA_GK20A_NVHOST=y \
-          CONFIG_TEGRA_GK20A_NVHOST_HOST1X=y \
+          CONFIG_TEGRA_GK20A_NVHOST=n \
+          CONFIG_TEGRA_GK20A_NVHOST_HOST1X=n \
           CONFIG_TEGRA_HWPM=n \
           srctree.nvgpu=/oot-src/nvgpu \
           srctree.nvidia=/oot-src/nvidia-oot \
