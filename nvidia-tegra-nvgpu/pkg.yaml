@@ -282,11 +282,14 @@ steps:
         grep -rl "class_create(THIS_MODULE," /oot-src/nvgpu/drivers/gpu/nvgpu/ \
           | xargs -r sed -i 's/class_create(THIS_MODULE, /class_create(/g'
         echo "Patched nvgpu files: class_create kernel 6.4+ compat"
-        # NVHOST=n: nvhost_host1x.c and platform_ga10b_tegra.c patches NOT needed.
-        # With CONFIG_TEGRA_GK20A_NVHOST=n, nvgpu uses GPU semaphore buffers for stream
-        # sync instead of host1x syncpoints. The syncpoint allocation path (and the
-        # associated NVGPU_ERRATA_SYNCPT_INVALID_ID_0 / HOST1X_SYNCPT_GPU issues from
-        # 5.9.0/5.9.1) are entirely bypassed.
+        # platform_ga10b_tegra.c: guard nvgpu_nvhost_syncpt_init with CONFIG_TEGRA_GK20A_NVHOST.
+        # This call is unguarded in OE4T d530a48; with NVHOST=n the function has no stub
+        # → compile error "call to undeclared function". The guard makes the call disappear
+        # when NVHOST=n so nvgpu compiles cleanly with GPU semaphore sync.
+        # (nvgpu_free_nvhost_dev at line 337 is already guarded in the OE4T source.)
+        GA10B=/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/platform_ga10b_tegra.c
+        awk '/nvgpu_nvhost_syncpt_init\(platform->g\)/{print "#ifdef CONFIG_TEGRA_GK20A_NVHOST"; in_syncpt=1} {print} in_syncpt && /^\t\}$/{print "#endif /* CONFIG_TEGRA_GK20A_NVHOST */"; in_syncpt=0}' "$GA10B" > "$GA10B.tmp" && mv "$GA10B.tmp" "$GA10B"
+        echo "Patched platform_ga10b_tegra.c: nvgpu_nvhost_syncpt_init wrapped in NVHOST guard (NVHOST=n compat)"
         # netlist.c: fix UBSAN array-index-out-of-bounds false positive.
         # struct netlist_image declares regions[1] (fixed size) but the loop iterates
         # over all regions from the firmware (header.regions >> 1). UBSAN fires for
