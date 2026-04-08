@@ -123,9 +123,9 @@ if [[ "${KERNEL_ONLY}" != "1" ]]; then
     --file Pkgfile \
     --target nvidia-tegra-nvgpu \
     --platform linux/arm64 \
-    "${CACHE_FROM_NVGPU[@]}" \
-    "${CACHE_TO_NVGPU[@]}" \
-    "${CACHE_TO_KERNEL[@]}" \
+    "${CACHE_FROM_NVGPU[@]+"${CACHE_FROM_NVGPU[@]}"}" \
+    "${CACHE_TO_NVGPU[@]+"${CACHE_TO_NVGPU[@]}"}" \
+    "${CACHE_TO_KERNEL[@]+"${CACHE_TO_KERNEL[@]}"}" \
     --output "type=local,dest=${NVGPU_OUT_DIR}" \
     . 2>&1 | tee "${BUILD_LOG}"
 
@@ -150,8 +150,8 @@ docker buildx build \
   --file Pkgfile \
   --target kernel-modules-clang \
   --platform linux/arm64 \
-  "${CACHE_FROM_KM_CLANG[@]}" \
-  "${CACHE_TO_KM_CLANG[@]}" \
+  "${CACHE_FROM_KM_CLANG[@]+"${CACHE_FROM_KM_CLANG[@]}"}" \
+  "${CACHE_TO_KM_CLANG[@]+"${CACHE_TO_KM_CLANG[@]}"}" \
   --output "type=local,dest=${KERNEL_MODULES_OUT_DIR}" \
   . 2>&1 | tee -a "${BUILD_LOG}"
 
