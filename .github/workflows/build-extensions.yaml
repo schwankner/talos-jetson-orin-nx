@@ -44,20 +44,27 @@ jobs:
           source scripts/common.sh
           NVGPU_IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos"
           KM_IMAGE="ghcr.io/${{ github.repository_owner }}/kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos"
+          INSTALLER_IMAGE="ghcr.io/${{ github.repository_owner }}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}"
           FW_IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-firmware-ext:${FIRMWARE_EXT_TAG}"
           NVGPU_EXISTS=false
           KM_EXISTS=false
+          INSTALLER_EXISTS=false
           FW_EXISTS=false
-          docker manifest inspect "${NVGPU_IMAGE}" >/dev/null 2>&1 && NVGPU_EXISTS=true || true
-          docker manifest inspect "${KM_IMAGE}"   >/dev/null 2>&1 && KM_EXISTS=true   || true
-          docker manifest inspect "${FW_IMAGE}"   >/dev/null 2>&1 && FW_EXISTS=true   || true
-          if ${NVGPU_EXISTS} && ${KM_EXISTS}; then
+          docker manifest inspect "${NVGPU_IMAGE}"     >/dev/null 2>&1 && NVGPU_EXISTS=true     || true
+          docker manifest inspect "${KM_IMAGE}"        >/dev/null 2>&1 && KM_EXISTS=true        || true
+          docker manifest inspect "${INSTALLER_IMAGE}" >/dev/null 2>&1 && INSTALLER_EXISTS=true || true
+          docker manifest inspect "${FW_IMAGE}"        >/dev/null 2>&1 && FW_EXISTS=true        || true
+          # All three must exist — custom-installer is built together with extensions and is
+          # required by the build-usb job. Skipping the build when installer is missing would
+          # cause the downstream UKI assembly to fail with a pull error.
+          if ${NVGPU_EXISTS} && ${KM_EXISTS} && ${INSTALLER_EXISTS}; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "✓ kernel+nvgpu extension images already in ghcr.io — skipping bldr build"
+            echo "✓ kernel+nvgpu+installer images already in ghcr.io — skipping bldr build"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            ${NVGPU_EXISTS} || echo "Will build: ${NVGPU_IMAGE}"
-            ${KM_EXISTS}    || echo "Will build: ${KM_IMAGE}"
+            ${NVGPU_EXISTS}     || echo "Will build: ${NVGPU_IMAGE}"
+            ${KM_EXISTS}        || echo "Will build: ${KM_IMAGE}"
+            ${INSTALLER_EXISTS} || echo "Will build: ${INSTALLER_IMAGE}"
           fi
           # firmware is independent — track separately
           if ${FW_EXISTS}; then

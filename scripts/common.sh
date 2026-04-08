@@ -4,7 +4,7 @@
 set -euo pipefail
 
 # ── Registry ────────────────────────────────────────────────────────────────
-REGISTRY="${REGISTRY:-192.168.1.100:5001}"
+REGISTRY="${REGISTRY:-10.0.10.24:5001}"
 REGISTRY_DOCKER="${REGISTRY_DOCKER:-host.docker.internal:5001}"
 
 # ── BuildKit layer cache (pushed to ghcr.io, shared across CI runs) ──────────
