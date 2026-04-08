@@ -324,6 +324,28 @@ steps:
         awk '/nvgpu_nvhost_syncpt_init\(platform->g\)/{print "#ifdef CONFIG_TEGRA_GK20A_NVHOST"; in_syncpt=1} {print} in_syncpt && /^\t\}$/{print "#endif /* CONFIG_TEGRA_GK20A_NVHOST */"; in_syncpt=0}' "$GA10B" > "$GA10B.tmp" && mv "$GA10B.tmp" "$GA10B"
         echo "Patched platform_ga10b_tegra.c: nvgpu_nvhost_syncpt_init guard added"
         echo "platform_ga10b_tegra.c: devfreq governor kept as nvhost_podgov"
+        # nvhost_host1x.c: drop HOST1X_SYNCPT_GPU flag from host1x_syncpt_alloc.
+        # With HOST1X_SYNCPT_GPU, host1x_syncpt_alloc() returns NULL because nvgpu
+        # is not registered as a host1x GPU client in the upstream host1x-next model.
+        # This causes nvgpu_nvhost_get_syncpt_client_managed() to return id=0, which
+        # triggers NVGPU_ERRATA_SYNCPT_INVALID_ID_0 (set for GA10b), making
+        # nvgpu_channel_sync_syncpt_create() fail → cuStreamSynchronize returns
+        # CUDA_ERROR_UNKNOWN (999) immediately on every async GPU operation.
+        # Fix: use HOST1X_SYNCPT_CLIENT_MANAGED only — works without GPU client registration.
+        NVHOST_H1X=/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/nvhost_host1x.c
+        sed -i 's/HOST1X_SYNCPT_CLIENT_MANAGED | HOST1X_SYNCPT_GPU/HOST1X_SYNCPT_CLIENT_MANAGED/g' \
+          "${NVHOST_H1X}"
+        echo "Patched nvhost_host1x.c: removed HOST1X_SYNCPT_GPU flag (fixes cuStreamSynchronize error 999)"
+        # netlist.c: fix UBSAN array-index-out-of-bounds false positive.
+        # struct netlist_image declares regions[1] (fixed size) but the loop iterates
+        # over all regions from the firmware (header.regions >> 1). UBSAN fires for
+        # every region with index >= 1. Changing to regions[] (C99 flexible array)
+        # silences UBSAN without changing memory layout or behavior.
+        NETLIST_PRIV=/oot-src/nvgpu/drivers/gpu/nvgpu/common/netlist/netlist_priv.h
+        if [ -f "${NETLIST_PRIV}" ]; then
+          sed -i 's/struct netlist_region regions\[1\]/struct netlist_region regions[]/' "${NETLIST_PRIV}"
+          echo "Patched netlist_priv.h: regions[1] → regions[] (silences UBSAN false positive)"
+        fi
         # ── Disable GCC-only plugin configs in auto.conf before make ─────────────
         # CONFIG_GCC_PLUGIN_LATENT_ENTROPY: the plugin injects a 'latent_entropy'
         # global variable declaration; without the plugin Clang can't find it.
