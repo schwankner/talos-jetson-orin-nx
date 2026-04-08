@@ -7,7 +7,7 @@
 # Usage:
 #   ./scripts/gen-config.sh
 #   NODE_IP=10.0.10.38 ./scripts/gen-config.sh
-#   INSTALL_IMAGE=ghcr.io/mrmoor/custom-installer:v1.12.6-6.18.18 ./scripts/gen-config.sh
+#   INSTALL_IMAGE=ghcr.io/schwankner/custom-installer:v1.12.6-6.18.18 ./scripts/gen-config.sh
 #
 # After generating:
 #   1. Boot Jetson from USB stick (maintenance mode)
@@ -19,7 +19,7 @@ source "$(dirname "$0")/common.sh"
 
 NODE_IP="${NODE_IP:-10.0.10.38}"
 # Prefer ghcr.io installer (CI-built). Fall back to local registry if ghcr.io image not yet public.
-INSTALL_IMAGE="${INSTALL_IMAGE:-ghcr.io/mrmoor/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}}"
+INSTALL_IMAGE="${INSTALL_IMAGE:-ghcr.io/schwankner/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}}"
 INSTALL_DISK="${INSTALL_DISK:-/dev/nvme0n1}"
 CLUSTER_NAME="${CLUSTER_NAME:-jetson-cluster}"
 REGISTRY_LOCAL="${REGISTRY_LOCAL:-10.0.10.24:5001}"
