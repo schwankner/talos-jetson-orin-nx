@@ -63,7 +63,11 @@ check_registry() {
 }
 
 check_talosctl() {
-  command -v talosctl &>/dev/null || error "talosctl not found. Run: brew install siderolabsio/tap/talosctl"
+  # Prefer ~/bin/talosctl (manually installed v1.12.6) over Homebrew version
+  if [[ -x "${HOME}/bin/talosctl" ]]; then
+    export PATH="${HOME}/bin:${PATH}"
+  fi
+  command -v talosctl &>/dev/null || error "talosctl not found. Install v1.12.6: https://github.com/siderolabs/talos/releases/tag/v1.12.6"
 }
 
 check_kubectl() {
