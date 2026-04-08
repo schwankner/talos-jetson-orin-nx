@@ -18,11 +18,13 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
 NODE_IP="${NODE_IP:-10.0.10.38}"
-# Prefer ghcr.io installer (CI-built). Fall back to local registry if ghcr.io image not yet public.
+# Installer from ghcr.io (CI-built, must be public — set visibility at github.com/schwankner/custom-installer → Package settings)
 INSTALL_IMAGE="${INSTALL_IMAGE:-ghcr.io/schwankner/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}}"
 INSTALL_DISK="${INSTALL_DISK:-/dev/nvme0n1}"
 CLUSTER_NAME="${CLUSTER_NAME:-jetson-cluster}"
-REGISTRY_LOCAL="${REGISTRY_LOCAL:-10.0.10.24:5001}"
+# Optional: local registry mirror for custom workload images (device-plugin, etc.)
+# Leave empty to use only public registries.
+REGISTRY_LOCAL="${REGISTRY_LOCAL:-}"
 
 check_talosctl
 
@@ -47,19 +49,37 @@ rm -f "${REPO_ROOT}/worker.yaml"
 
 info "Generated: controlplane.yaml + talosconfig"
 
-# ── 2. Patch: local registry mirror (for device plugin etc.) ──────────────────
-info "Patching: registry mirror ${REGISTRY_LOCAL}..."
-talosctl machineconfig patch "${REPO_ROOT}/controlplane.yaml" \
-  --patch "[{\"op\":\"add\",\"path\":\"/machine/registries\",\"value\":{\"mirrors\":{\"${REGISTRY_LOCAL}\":{\"endpoints\":[\"http://${REGISTRY_LOCAL}\"]}}}}]" \
-  --output "${REPO_ROOT}/controlplane.yaml"
+# ── 2. Patch: node labels (+ optional local registry mirror) ──────────────────
+# talosctl machineconfig patch uses strategic merge (not JSON6902) for machine configs.
+PATCH_FILE=$(mktemp /tmp/talos-patch-XXXXXX.yaml)
 
-# ── 3. Patch: node labels ──────────────────────────────────────────────────────
-info "Patching: node labels..."
-talosctl machineconfig patch "${REPO_ROOT}/controlplane.yaml" \
-  --patch '[{"op":"add","path":"/machine/nodeLabels","value":{"node.kubernetes.io/exclude-from-external-load-balancers":""}}]' \
-  --output "${REPO_ROOT}/controlplane.yaml"
+if [[ -n "${REGISTRY_LOCAL}" ]]; then
+  info "Patching: node labels + registry mirror ${REGISTRY_LOCAL}..."
+  cat > "${PATCH_FILE}" <<EOF
+machine:
+  registries:
+    mirrors:
+      ${REGISTRY_LOCAL}:
+        endpoints:
+          - "http://${REGISTRY_LOCAL}"
+  nodeLabels:
+    node.kubernetes.io/exclude-from-external-load-balancers: ""
+EOF
+else
+  info "Patching: node labels (no local registry mirror)..."
+  cat > "${PATCH_FILE}" <<'EOF'
+machine:
+  nodeLabels:
+    node.kubernetes.io/exclude-from-external-load-balancers: ""
+EOF
+fi
 
-# ── 4. Update talosconfig with node IP ─────────────────────────────────────────
+talosctl machineconfig patch "${REPO_ROOT}/controlplane.yaml" \
+  --patch "@${PATCH_FILE}" \
+  --output "${REPO_ROOT}/controlplane.yaml"
+rm -f "${PATCH_FILE}"
+
+# ── 3. Update talosconfig with node IP ─────────────────────────────────────────
 talosctl --talosconfig "${REPO_ROOT}/talosconfig" \
   config endpoint "${NODE_IP}"
 talosctl --talosconfig "${REPO_ROOT}/talosconfig" \
