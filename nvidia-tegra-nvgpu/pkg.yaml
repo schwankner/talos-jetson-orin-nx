@@ -338,8 +338,8 @@ steps:
           CC=/usr/local/bin/clang-oot \
           CONFIG_TEGRA_OOT_MODULE=m \
           CONFIG_GK20A=m \
-          CONFIG_TEGRA_GK20A_NVHOST=n \
-          CONFIG_TEGRA_GK20A_NVHOST_HOST1X=n \
+          CONFIG_TEGRA_GK20A_NVHOST=y \
+          CONFIG_TEGRA_GK20A_NVHOST_HOST1X=y \
           CONFIG_TEGRA_HWPM=n \
           srctree.nvgpu=/oot-src/nvgpu \
           srctree.nvidia=/oot-src/nvidia-oot \
@@ -360,8 +360,24 @@ steps:
         find /oot-src/nvgpu -name "*.ko" \
           -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \;
 
-        # nvidia-oot modules (nvmap, host1x-fence, mc-utils, ...)
-        find /oot-src/nvidia-oot -name "*.ko" \
+        # OOT host1x: install at the IN-TREE path so the squashfs overlay replaces the
+        # in-tree host1x.ko entirely. depmod then finds exactly ONE host1x at
+        # kernel/drivers/gpu/host1x/host1x.ko (our OOT version), which exports
+        # host1x_fence_extract and all syncpt symbols with OOT CRCs that match nvgpu
+        # and host1x-fence (compiled with Module.symvers.nvidia = OOT host1x CRCs).
+        NVIDIA_OOT=/oot-src/nvidia-oot
+        OOT_HOST1X="${NVIDIA_OOT}/drivers/gpu/host1x/host1x.ko"
+        if [ -f "${OOT_HOST1X}" ]; then
+          mkdir -p /rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/drivers/gpu/host1x
+          install -m 644 "${OOT_HOST1X}" \
+            /rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/drivers/gpu/host1x/host1x.ko
+          echo "Installed OOT host1x.ko → kernel/ path (replaces in-tree via overlay)"
+        else
+          echo "WARNING: OOT host1x.ko not found — in-tree host1x will be used (NVHOST=y may fail)"
+        fi
+
+        # All other nvidia-oot modules go to extra/ as before
+        find /oot-src/nvidia-oot -name "*.ko" ! -path "*/host1x/host1x.ko" \
           -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \;
 
         # Use a fixed signing key if present in the package directory.
@@ -379,7 +395,9 @@ steps:
           echo "WARNING: No fixed signing key found — using kernel-generated key (may not match running kernel)"
         fi
         echo "Signing kernel modules..."
-        find /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ -name "*.ko" | while read ko; do
+        find /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \
+             /rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/drivers/gpu/host1x/ \
+             -name "*.ko" 2>/dev/null | while read ko; do
           /src/scripts/sign-file sha512 \
             /src/certs/signing_key.pem \
             /src/certs/signing_key.x509 \
