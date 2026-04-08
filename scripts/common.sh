@@ -28,7 +28,7 @@ LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
 LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.7.0}"          # .../ 5.5.0 (strip -pg/-mrecord-mcount) / 5.6.0 (strip -fpatchable-function-entry=*: fix ftrace crash on ARM64 with MCOUNT_USE_PATCHABLE_FUNCTION_ENTRY) / 5.7.0 (CONFIG_TEGRA_GK20A_NVHOST=y: fix cudaStreamSynchronize busy-poll, enable real nvhost syncpoints)
+NVGPU_VERSION="${NVGPU_VERSION:-5.8.0}"          # .../ 5.6.0 (ftrace fix) / 5.7.0 (NVHOST=y BROKEN: host1x_fence_extract missing in upstream 6.18 + CRC mismatch) / 5.8.0 (revert NVHOST=n, stable)
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 
