@@ -63,3 +63,4 @@ scripts/setup-cdi.sh
 
 # ── Intermediate imager output directories ────────────────────────────────────
 imager-out-v*/
+controlplane.yaml
