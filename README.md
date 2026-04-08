@@ -3,7 +3,7 @@
 [![Talos](https://img.shields.io/badge/Talos-v1.12.6-blue)](https://github.com/siderolabs/talos/releases/tag/v1.12.6)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35.0-blue)](https://kubernetes.io/)
 [![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
-[![nvgpu](https://img.shields.io/badge/nvgpu-5.6.0-green)](https://github.com/OE4T/linux-nvgpu)
+[![nvgpu](https://img.shields.io/badge/nvgpu-5.8.0-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 [![Build](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml)
 
@@ -88,9 +88,10 @@ reComputer J4012 which provides NVMe, 2× GbE, and a standard UART TCU connector
 6. [Component Versions](#6-component-versions)
 7. [GPU Verification](#7-gpu-verification)
 8. [GPU Power Modes](#8-gpu-power-modes)
-9. [Known Limitations](#9-known-limitations)
-10. [Contributing](#10-contributing)
-11. [References](#11-references)
+9. [GPU Generation Speed — Investigation & Roadmap](#9-gpu-generation-speed--investigation--roadmap)
+10. [Known Limitations](#10-known-limitations)
+11. [Contributing](#11-contributing)
+12. [References](#12-references)
 
 ---
 
@@ -483,7 +484,113 @@ talosctl -n 10.0.10.38 read /sys/devices/system/cpu/online
 
 ---
 
-## 9. Known Limitations
+## 9. GPU Generation Speed — Investigation & Roadmap
+
+### Current Status
+
+Ollama (qwen2.5:1.5b Q4_K_M, 29/29 layers on CUDA) delivers **~7–8 tok/s** decode on Jetson
+Orin NX 16 GB. The expected throughput is **20–30 tok/s**. This section documents what has
+been investigated, ruled out, and what the planned fix is.
+
+### What Was Ruled Out
+
+All of the following were tested and had **no measurable effect** on generation speed:
+
+| Attempted | Result |
+|-----------|--------|
+| GPU clock: 306 MHz → 918 MHz (MAXN) | No change — speed stays at ~7.5 tok/s |
+| `GGML_CUDA_GRAPHS=1` (batch all kernel launches) | No change |
+| `OLLAMA_FLASH_ATTENTION=1` | No change |
+| `OLLAMA_NUM_PARALLEL=1` (reduce idle KV-cache slots) | No change |
+| `OLLAMA_KV_CACHE_TYPE=q8_0` (halve KV cache size) | No change |
+| `CUDA_LAUNCH_BLOCKING=0` | No change |
+
+GPU clock having **zero effect** on decode speed is the key diagnostic: the bottleneck is
+not GPU compute throughput but CPU-side overhead between tokens.
+
+### Root Cause Hypothesis: `cudaStreamSynchronize` Without Host1x Syncpoints
+
+nvgpu is built with `CONFIG_TEGRA_GK20A_NVHOST=n` (required to avoid CUDA error 999 on
+stock upstream kernels). With NVHOST disabled, nvgpu **does not register GPU syncpoints
+with the host1x subsystem**. `cudaStreamSynchronize` must therefore busy-poll or use an
+internal wake mechanism that introduces ~130 ms/token overhead.
+
+Evidence:
+- CPU ramps to **1984 MHz during generation** (typical of busy-wait or heavy CPU sampling)
+- GPU stays at **minimum clock during generation** (not compute-bound)
+- Prefill is **fast (~450 tok/s)** — proves GPU CUDA compute itself works correctly
+
+### Why NVHOST=y Failed (nvgpu 5.7.0 — 2026-04-08)
+
+Enabling `CONFIG_TEGRA_GK20A_NVHOST=y` in nvgpu 5.7.0 caused nvgpu.ko to **fail loading**
+with two separate blockers:
+
+**Blocker 1 — Symbol CRC mismatch** (all `host1x_syncpt_*` symbols)
+
+nvgpu was compiled against NVIDIA's JetPack BSP kernel headers (via `Module.symvers.nvidia`
+from `nvidia-linux-header/conftest`). These contain different CRC values for host1x symbols
+than the upstream kernel 6.18 `host1x.ko`. At load time the kernel reports:
+
+```
+nvgpu: disagrees about version of symbol host1x_syncpt_get_by_id_noref
+nvgpu: disagrees about version of symbol host1x_syncpt_wait
+nvgpu: disagrees about version of symbol host1x_fence_create
+... (all host1x_syncpt_* and host1x_fence_* symbols)
+```
+
+**Blocker 2 — `host1x_fence_extract` missing from upstream kernel 6.18** (`err -2`)
+
+`host1x_fence_extract` is a NVIDIA-private API added to their downstream JetPack kernel
+but **not present in upstream Linux 6.18**. The function extracts the syncpoint ID and
+threshold from a `dma_fence` created by `host1x_fence_create`. Without it, nvgpu cannot
+resolve its full dependency chain and refuses to load:
+
+```
+nvgpu: Unknown symbol host1x_fence_extract (err -2)
+```
+
+### Planned Fix: Patch In-Tree `host1x.ko` (nvgpu 5.9.0)
+
+The cleanest solution is to patch `drivers/gpu/host1x/fence.c` in the kernel source tree
+**during the extension build** and rebuild `host1x.ko` as part of the extension. This
+solves both blockers simultaneously:
+
+1. **CRC mismatch** → resolved automatically: nvgpu is compiled against the same patched
+   source tree as the rebuilt `host1x.ko`, so symbol CRCs always match.
+2. **Missing `host1x_fence_extract`** → added directly to `fence.c`:
+
+```c
+// drivers/gpu/host1x/fence.c  — patch applied in nvidia-tegra-nvgpu/pkg.yaml
+int host1x_fence_extract(struct dma_fence *fence, u32 *id, u32 *thresh)
+{
+    struct host1x_syncpt_fence *f = to_host1x_syncpt_fence(fence);
+    if (!f) return -EINVAL;
+    *id = host1x_syncpt_id(f->sp);
+    *thresh = READ_ONCE(f->thresh);
+    return 0;
+}
+EXPORT_SYMBOL(host1x_fence_extract);
+```
+
+The rebuilt `host1x.ko` is installed into the extension's `extra/nvidia-tegra/` path,
+which takes precedence over the in-tree module at boot. `tegra_drm` continues to work
+because the patched host1x is a strict superset of the upstream API.
+
+**Estimated improvement**: 7–8 tok/s → 20–30 tok/s (removing the per-token CPU stall).
+
+### nvgpu Version History
+
+| Version | Change | Result |
+|---------|--------|--------|
+| 5.5.0 | Strip `-pg`/`-mrecord-mcount` in clang-oot | Fixed modpost build errors |
+| 5.6.0 | Strip `-fpatchable-function-entry=*` in clang-oot | Fixed ftrace crash on ARM64 boot |
+| 5.7.0 | `CONFIG_TEGRA_GK20A_NVHOST=y` | **nvgpu fails to load** — CRC mismatch + missing `host1x_fence_extract` |
+| **5.8.0** | Revert `NVHOST=n` (stable) | nvgpu loads; GPU works; 7–8 tok/s (current) |
+| 5.9.0 *(planned)* | `NVHOST=y` + `host1x.ko` patch in extension | Expected 20–30 tok/s |
+
+---
+
+## 10. Known Limitations
 
 | Limitation | Impact | Notes |
 |---|---|---|
@@ -497,7 +604,7 @@ talosctl -n 10.0.10.38 read /sys/devices/system/cpu/online
 
 ---
 
-## 10. Contributing
+## 11. Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 
@@ -509,7 +616,7 @@ Contributions especially welcome for:
 
 ---
 
-## 11. References
+## 12. References
 
 - [Talos Linux v1.12 Documentation](https://www.talos.dev/v1.12/)
 - [Talos System Extensions Guide](https://www.talos.dev/v1.12/talos-guides/configuration/system-extensions/)
@@ -523,7 +630,7 @@ Contributions especially welcome for:
 
 ---
 
-## 12. AI Disclaimer
+## 13. AI Disclaimer
 
 Parts of this project were developed with the assistance of AI tools (primarily [Claude](https://claude.ai) by Anthropic), in particular:
 
