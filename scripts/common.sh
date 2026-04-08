@@ -28,7 +28,7 @@ LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
 LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.9.0}"          # .../ 5.7.0 (NVHOST=y broken: OOT host1x not overriding in-tree) / 5.8.0 (NVHOST=n stable) / 5.9.0 (NVHOST=y: OOT host1x installed at kernel/ path to replace in-tree via squashfs overlay)
+NVGPU_VERSION="${NVGPU_VERSION:-5.9.1}"          # .../ 5.7.0 (NVHOST=y broken: OOT host1x not overriding in-tree) / 5.8.0 (NVHOST=n stable) / 5.9.0 (NVHOST=y: OOT host1x installed at kernel/ path to replace in-tree via squashfs overlay) / 5.9.1 (HOST1X_SYNCPT_GPU removed → fixes cuStreamSynchronize CUDA error 999; netlist UBSAN false positive silenced)
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 
