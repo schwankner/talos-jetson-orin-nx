@@ -89,6 +89,15 @@ docker build --no-cache --platform linux/arm64 -t "${CUSTOM_IMAGER_TAG}" "${KERN
 info "  Imager image: ${CUSTOM_IMAGER_TAG}"
 
 # ── 3. Generate imager profile ────────────────────────────────────────────────
+# forceInsecure: true is needed for plain-HTTP local registries (e.g. host.docker.internal:5001).
+# For ghcr.io (HTTPS), we must set it to false — otherwise the imager attempts an HTTP connection
+# to ghcr.io and authentication fails.
+if [[ "${REGISTRY_DOCKER}" == ghcr.io/* || "${REGISTRY_DOCKER}" == *.pkg.github.com/* ]]; then
+  FORCE_INSECURE=false
+else
+  FORCE_INSECURE=true
+fi
+
 PROFILE=$(cat <<EOF
 arch: arm64
 platform: metal
@@ -105,14 +114,14 @@ input:
     path: /usr/install/arm64/systemd-boot.efi
   baseInstaller:
     imageRef: ${REGISTRY_DOCKER}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}
-    forceInsecure: true
+    forceInsecure: ${FORCE_INSECURE}
   systemExtensions:
     - imageRef: ${REGISTRY_DOCKER}/kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos
-      forceInsecure: true
+      forceInsecure: ${FORCE_INSECURE}
     - imageRef: ${REGISTRY_DOCKER}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos
-      forceInsecure: true
+      forceInsecure: ${FORCE_INSECURE}
     - imageRef: ${REGISTRY_DOCKER}/nvidia-firmware-ext:${FIRMWARE_EXT_TAG}
-      forceInsecure: true
+      forceInsecure: ${FORCE_INSECURE}
 customization:
   extraKernelArgs:
     - console=ttyTCU0,115200
