@@ -1,0 +1,448 @@
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// nvhost_ctrl_shim.c — nvhost-ctrl userspace API shim for Talos Linux / Jetson Orin NX
+//
+// Provides /dev/nvhost-ctrl with the NVHOST_IOCTL_CTRL_* interface,
+// bridging to the OOT host1x syncpoint kernel API.
+//
+// This allows libnvrm_host1x.so (JetPack 6 CUDA runtime) to use hardware
+// syncpoint interrupts for cudaStreamSynchronize — replacing the CPU semaphore
+// busy-wait of NVHOST=n with interrupt-driven sync (~3-4x faster decode).
+//
+// Symbol dependencies (all from host1x.ko):
+//   host1x_syncpt_get_by_id_noref, host1x_syncpt_read, host1x_syncpt_read_max,
+//   host1x_fence_create, host1x_fence_extract
+//
+// Supported ioctls:
+//   NVHOST_IOCTL_CTRL_GET_VERSION       (7)  → return 0
+//   NVHOST_IOCTL_CTRL_SYNCPT_READ       (1)  → host1x_syncpt_read()
+//   NVHOST_IOCTL_CTRL_SYNCPT_READ_MAX   (8)  → host1x_syncpt_read_max()
+//   NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE (11) → host1x_fence_create() → sync_file fd
+//   NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT (19) → sync_file fd → host1x_fence_extract()
+//
+// Targets kernel 6.18 (Talos v1.12.6):
+//   - class_create() without THIS_MODULE (kernel 6.4+)
+//   - devnode() callback with const struct device * (kernel 6.2+)
+//   - close_fd() (kernel 5.11+, replaces __close_fd)
+
+#include <linux/cdev.h>
+#include <linux/dma-fence-array.h>
+#include <linux/file.h>
+#include <linux/fs.h>
+#include <linux/host1x-next.h>
+#include <linux/module.h>
+#include <linux/of.h>
+#include <linux/of_platform.h>
+#include <linux/platform_device.h>
+#include <linux/slab.h>
+#include <linux/sync_file.h>
+#include <linux/uaccess.h>
+
+// ── NVHOST uapi structs (from linux-nv-oot/include/uapi/linux/nvhost_ioctl.h) ──
+// Embedded directly to avoid uapi header path issues.
+
+#define NVHOST_IOCTL_MAGIC 'H'
+
+struct nvhost_get_param_args {
+	__u32 value;
+} __packed;
+
+struct nvhost_ctrl_syncpt_read_args {
+	__u32 id;
+	__u32 value;
+};
+
+struct nvhost_ctrl_sync_fence_info {
+	__u32 id;
+	__u32 thresh;
+};
+
+struct nvhost_ctrl_sync_fence_create_args {
+	__u32 num_pts;
+	__s32 fence_fd;
+	__u64 pts;     /* struct nvhost_ctrl_sync_fence_info __user * */
+	__u64 name;    /* const char __user * — ignored, fences are anonymous */
+};
+
+struct nvhost_ctrl_sync_file_extract {
+	__s32 fd;
+	__u32 num_fences;
+	__u64 fences_ptr; /* struct nvhost_ctrl_sync_fence_info __user * */
+};
+
+#define NVHOST_IOCTL_CTRL_SYNCPT_READ \
+	_IOWR(NVHOST_IOCTL_MAGIC, 1, struct nvhost_ctrl_syncpt_read_args)
+#define NVHOST_IOCTL_CTRL_GET_VERSION \
+	_IOR(NVHOST_IOCTL_MAGIC, 7, struct nvhost_get_param_args)
+#define NVHOST_IOCTL_CTRL_SYNCPT_READ_MAX \
+	_IOWR(NVHOST_IOCTL_MAGIC, 8, struct nvhost_ctrl_syncpt_read_args)
+#define NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE \
+	_IOWR(NVHOST_IOCTL_MAGIC, 11, struct nvhost_ctrl_sync_fence_create_args)
+#define NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT \
+	_IOWR(NVHOST_IOCTL_MAGIC, 19, struct nvhost_ctrl_sync_file_extract)
+
+// ── Module state ──────────────────────────────────────────────────────────────
+
+static struct {
+	struct class  *class;
+	struct cdev    cdev;
+	struct device *dev;
+	dev_t          devt;
+} nvhost_shim;
+
+// ── host1x device lookup ──────────────────────────────────────────────────────
+
+static const struct of_device_id host1x_of_match[] = {
+	{ .compatible = "nvidia,tegra234-host1x" },
+	{ .compatible = "nvidia,tegra194-host1x" },
+	{ .compatible = "nvidia,tegra186-host1x" },
+	{},
+};
+
+static struct host1x *get_host1x(void)
+{
+	struct platform_device *pdev;
+	struct device_node *np;
+	void *drvdata;
+
+	np = of_find_matching_node(NULL, host1x_of_match);
+	if (!np)
+		return ERR_PTR(-ENODEV);
+
+	pdev = of_find_device_by_node(np);
+	of_node_put(np);
+	if (!pdev)
+		return ERR_PTR(-EAGAIN);
+
+	drvdata = platform_get_drvdata(pdev);
+	if (!drvdata)
+		return ERR_PTR(-EAGAIN);
+
+	return drvdata;
+}
+
+// ── File operations ───────────────────────────────────────────────────────────
+
+static int nvhost_ctrl_open(struct inode *inode, struct file *file)
+{
+	struct host1x *host1x = get_host1x();
+
+	if (IS_ERR(host1x))
+		return PTR_ERR(host1x);
+
+	file->private_data = host1x;
+	return 0;
+}
+
+// ── NVHOST_IOCTL_CTRL_SYNCPT_READ / SYNCPT_READ_MAX ──────────────────────────
+
+static int ioctl_syncpt_read(struct host1x *host1x, void __user *data,
+			     bool read_max)
+{
+	struct nvhost_ctrl_syncpt_read_args args;
+	struct host1x_syncpt *sp;
+
+	if (copy_from_user(&args, data, sizeof(args)))
+		return -EFAULT;
+
+	sp = host1x_syncpt_get_by_id_noref(host1x, args.id);
+	if (!sp)
+		return -EINVAL;
+
+	args.value = read_max ? host1x_syncpt_read_max(sp)
+			      : host1x_syncpt_read(sp);
+
+	return copy_to_user(data, &args, sizeof(args)) ? -EFAULT : 0;
+}
+
+// ── NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE ──────────────────────────────────────
+
+static int make_fence_fd(struct host1x_syncpt *sp, u32 thresh)
+{
+	struct sync_file *sfile;
+	struct dma_fence *f;
+	int fd;
+
+	f = host1x_fence_create(sp, thresh, true);
+	if (IS_ERR(f))
+		return PTR_ERR(f);
+
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0) {
+		dma_fence_put(f);
+		return fd;
+	}
+
+	sfile = sync_file_create(f);
+	dma_fence_put(f);
+	if (!sfile) {
+		put_unused_fd(fd);
+		return -ENOMEM;
+	}
+
+	fd_install(fd, sfile->file);
+	return fd;
+}
+
+static int make_array_fence_fd(struct host1x *host1x,
+				struct nvhost_ctrl_sync_fence_info __user *pts_user,
+				u32 num_pts)
+{
+	struct dma_fence **fences;
+	struct dma_fence_array *arr;
+	struct sync_file *sfile;
+	struct host1x_syncpt *sp;
+	struct nvhost_ctrl_sync_fence_info pt;
+	int fd, err = 0;
+	u32 i;
+
+	fences = kcalloc(num_pts, sizeof(*fences), GFP_KERNEL);
+	if (!fences)
+		return -ENOMEM;
+
+	for (i = 0; i < num_pts; i++) {
+		if (copy_from_user(&pt, pts_user + i, sizeof(pt))) {
+			err = -EFAULT;
+			goto free_fences;
+		}
+		sp = host1x_syncpt_get_by_id_noref(host1x, pt.id);
+		if (!sp) {
+			err = -EINVAL;
+			goto free_fences;
+		}
+		fences[i] = host1x_fence_create(sp, pt.thresh, true);
+		if (IS_ERR(fences[i])) {
+			err = PTR_ERR(fences[i]);
+			fences[i] = NULL;
+			goto free_fences;
+		}
+	}
+
+	/* dma_fence_array_create takes ownership of fences[] on success */
+	arr = dma_fence_array_create(num_pts, fences,
+				     dma_fence_context_alloc(1), 1, false);
+	if (!arr) {
+		err = -ENOMEM;
+		goto free_fences;
+	}
+
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0) {
+		err = fd;
+		dma_fence_put(&arr->base);
+		return err;
+	}
+
+	sfile = sync_file_create(&arr->base);
+	dma_fence_put(&arr->base);
+	if (!sfile) {
+		put_unused_fd(fd);
+		return -ENOMEM;
+	}
+
+	fd_install(fd, sfile->file);
+	return fd;
+
+free_fences:
+	for (i = 0; i < num_pts; i++)
+		if (fences[i])
+			dma_fence_put(fences[i]);
+	kfree(fences);
+	return err;
+}
+
+static int ioctl_sync_fence_create(struct host1x *host1x, void __user *data)
+{
+	struct nvhost_ctrl_sync_fence_info __user *pts_user;
+	struct nvhost_ctrl_sync_fence_create_args args;
+	struct nvhost_ctrl_sync_fence_info pt;
+	struct host1x_syncpt *sp;
+	int fd;
+
+	if (copy_from_user(&args, data, sizeof(args)))
+		return -EFAULT;
+
+	if (args.num_pts == 0 || args.num_pts > 512)
+		return -EINVAL;
+
+	pts_user = u64_to_user_ptr(args.pts);
+
+	if (args.num_pts == 1) {
+		if (copy_from_user(&pt, pts_user, sizeof(pt)))
+			return -EFAULT;
+		sp = host1x_syncpt_get_by_id_noref(host1x, pt.id);
+		if (!sp)
+			return -EINVAL;
+		fd = make_fence_fd(sp, pt.thresh);
+	} else {
+		fd = make_array_fence_fd(host1x, pts_user, args.num_pts);
+	}
+
+	if (fd < 0)
+		return fd;
+
+	args.fence_fd = fd;
+	if (copy_to_user(data, &args, sizeof(args))) {
+		close_fd(fd);
+		return -EFAULT;
+	}
+	return 0;
+}
+
+// ── NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT ──────────────────────────────────────
+
+static int ioctl_sync_file_extract(struct host1x *host1x, void __user *data)
+{
+	struct nvhost_ctrl_sync_fence_info __user *fences_user;
+	struct nvhost_ctrl_sync_file_extract args;
+	struct dma_fence *fence, **fences;
+	struct dma_fence_array *array;
+	unsigned int num_fences, i, j;
+	int err = 0;
+
+	if (copy_from_user(&args, data, sizeof(args)))
+		return -EFAULT;
+
+	fences_user = u64_to_user_ptr(args.fences_ptr);
+
+	fence = sync_file_get_fence(args.fd);
+	if (!fence)
+		return -EINVAL;
+
+	array = to_dma_fence_array(fence);
+	if (array) {
+		fences = array->fences;
+		num_fences = array->num_fences;
+	} else {
+		fences = &fence;
+		num_fences = 1;
+	}
+
+	for (i = 0, j = 0; i < num_fences; i++) {
+		struct nvhost_ctrl_sync_fence_info fi;
+
+		err = host1x_fence_extract(fences[i], &fi.id, &fi.thresh);
+		if (err == -EINVAL && dma_fence_is_signaled(fences[i])) {
+			/* signaled stub fence — skip */
+			err = 0;
+			continue;
+		}
+		if (err)
+			goto put;
+
+		if (j < args.num_fences) {
+			if (copy_to_user(fences_user + j, &fi, sizeof(fi))) {
+				err = -EFAULT;
+				goto put;
+			}
+		}
+		j++;
+	}
+
+	args.num_fences = j;
+	if (copy_to_user(data, &args, sizeof(args)))
+		err = -EFAULT;
+
+put:
+	dma_fence_put(fence);
+	return err;
+}
+
+// ── Ioctl dispatcher ──────────────────────────────────────────────────────────
+
+static long nvhost_ctrl_ioctl(struct file *file, unsigned int cmd,
+			      unsigned long arg)
+{
+	struct host1x *host1x = file->private_data;
+	void __user *data = (void __user *)arg;
+
+	switch (cmd) {
+	case NVHOST_IOCTL_CTRL_GET_VERSION: {
+		struct nvhost_get_param_args v = { .value = 0 };
+		return copy_to_user(data, &v, sizeof(v)) ? -EFAULT : 0;
+	}
+	case NVHOST_IOCTL_CTRL_SYNCPT_READ:
+		return ioctl_syncpt_read(host1x, data, false);
+	case NVHOST_IOCTL_CTRL_SYNCPT_READ_MAX:
+		return ioctl_syncpt_read(host1x, data, true);
+	case NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE:
+		return ioctl_sync_fence_create(host1x, data);
+	case NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT:
+		return ioctl_sync_file_extract(host1x, data);
+	default:
+		return -ENOTTY;
+	}
+}
+
+// ── Device class / cdev setup ─────────────────────────────────────────────────
+
+static char *nvhost_ctrl_devnode(const struct device *dev, umode_t *mode)
+{
+	*mode = 0666;
+	return NULL;
+}
+
+static const struct file_operations nvhost_ctrl_fops = {
+	.owner          = THIS_MODULE,
+	.open           = nvhost_ctrl_open,
+	.unlocked_ioctl = nvhost_ctrl_ioctl,
+	.compat_ioctl   = nvhost_ctrl_ioctl,
+};
+
+// ── Module init / exit ────────────────────────────────────────────────────────
+
+static int __init nvhost_ctrl_shim_init(void)
+{
+	dev_t devt;
+	int err;
+
+	err = alloc_chrdev_region(&devt, 0, 1, "nvhost-ctrl");
+	if (err)
+		return err;
+
+	nvhost_shim.class = class_create("nvhost-ctrl");
+	if (IS_ERR(nvhost_shim.class)) {
+		err = PTR_ERR(nvhost_shim.class);
+		goto unregister;
+	}
+	nvhost_shim.class->devnode = nvhost_ctrl_devnode;
+
+	cdev_init(&nvhost_shim.cdev, &nvhost_ctrl_fops);
+	err = cdev_add(&nvhost_shim.cdev, devt, 1);
+	if (err)
+		goto destroy_class;
+
+	nvhost_shim.dev = device_create(nvhost_shim.class, NULL,
+					devt, NULL, "nvhost-ctrl");
+	if (IS_ERR(nvhost_shim.dev)) {
+		err = PTR_ERR(nvhost_shim.dev);
+		goto del_cdev;
+	}
+
+	nvhost_shim.devt = devt;
+	pr_info("nvhost-ctrl-shim: /dev/nvhost-ctrl ready (major %d)\n",
+		MAJOR(devt));
+	return 0;
+
+del_cdev:
+	cdev_del(&nvhost_shim.cdev);
+destroy_class:
+	class_destroy(nvhost_shim.class);
+unregister:
+	unregister_chrdev_region(devt, 1);
+	return err;
+}
+
+static void __exit nvhost_ctrl_shim_exit(void)
+{
+	device_destroy(nvhost_shim.class, nvhost_shim.devt);
+	cdev_del(&nvhost_shim.cdev);
+	class_destroy(nvhost_shim.class);
+	unregister_chrdev_region(nvhost_shim.devt, 1);
+}
+
+module_init(nvhost_ctrl_shim_init);
+module_exit(nvhost_ctrl_shim_exit);
+
+MODULE_DESCRIPTION("nvhost-ctrl shim — NVHOST ioctl API over OOT host1x for Talos Jetson");
+MODULE_LICENSE("GPL");
