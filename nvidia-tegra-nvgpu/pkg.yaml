@@ -244,6 +244,7 @@ steps:
           srctree.nvidia-oot=${NVIDIA_OOT} \
           srctree.nvconftest=${NVIDIA_CONFTEST} \
           LLVM=1 \
+          KBUILD_EXTRA_SYMBOLS=/oot-src/out/nvidia-linux-header/Module.symvers.nvidia \
           modules 2>&1 | tee /tmp/build-host1x-fence.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "host1x-fence: OK" || { echo "host1x-fence: BUILD FAILED (see errors above)"; exit 1; }
         cat ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Module.symvers \
           >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
