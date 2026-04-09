@@ -551,3 +551,62 @@ Fix: wrap the call in `#ifdef CONFIG_TEGRA_GK20A_NVHOST` via awk in `pkg.yaml`.
 **Result**: CUDA error 999 fully resolved. Ollama 25/25 GPU layers, HTTP 200, ~7 tok/s decode.
 The `Can't initialize nvrm channel` warning remains (libcuda.so discovery phase) but is
 non-fatal — GPU channels are created successfully via the NVHOST=n semaphore path.
+
+---
+
+## Bug 15 — GPU Decode Speed: ~7 tok/s (CPU Polling Overhead with NVHOST=n)
+
+**Symptom**: Ollama inference (qwen2.5:0.5b, 25/25 layers on CUDA) delivers only ~7 tok/s
+decode on Jetson Orin NX 16 GB. Expected throughput is 20–30 tok/s.
+
+### What Was Ruled Out
+
+All of the following were tested and had **no measurable effect** on decode speed:
+
+| Attempted | Result |
+|-----------|--------|
+| GPU clock: 306 MHz → 918 MHz (MAXN) | No change — stays at ~7 tok/s |
+| `GGML_CUDA_GRAPHS=1` | No change |
+| `OLLAMA_FLASH_ATTENTION=1` | No change |
+| `OLLAMA_NUM_PARALLEL=1` | No change |
+| `OLLAMA_KV_CACHE_TYPE=q8_0` | No change |
+
+GPU clock having **zero effect** is the key diagnostic: the bottleneck is not GPU compute
+throughput but CPU-side overhead between tokens.
+
+### Root Cause: sema_buf Polling in `cudaStreamSynchronize` (NVHOST=n)
+
+With `CONFIG_TEGRA_GK20A_NVHOST=n`, nvgpu uses GPU semaphore buffers (`sema_buf`) for
+stream synchronization instead of host1x hardware syncpoints. The semaphore mechanism
+requires the CPU to actively poll or sleep-wait after each `cudaStreamSynchronize` call —
+introducing ~130 ms/token overhead in decode.
+
+Evidence:
+- CPU ramps to ~1984 MHz during generation (busy-wait pattern)
+- GPU stays at minimum clock during generation (not compute-bound)
+- Prefill is fast (~110 tok/s) — proves the GPU CUDA compute path itself is correct
+
+### Why NVHOST=y Was Attempted (nvgpu 5.9.0 / 5.9.1) and Still Failed
+
+`CONFIG_TEGRA_GK20A_NVHOST=y` uses host1x hardware syncpoints for `cudaStreamSynchronize`,
+which would eliminate the per-token CPU polling. Both attempts ended with CUDA error 999 —
+documented in full in **[Bug 14](#bug-14--cuda-error-999-persists-with-nvhost=y-nvgpu-590--591)**.
+
+### Current Status
+
+NVHOST=n is the stable configuration (nvgpu 5.9.2). The ~7 tok/s decode rate is an accepted
+limitation while NVHOST=y remains broken on upstream kernels. A future fix would require
+either making the GA10b GPU pool available to nvgpu via the upstream host1x-next model, or
+backporting host1x GPU client registration support.
+
+### nvgpu Version History
+
+| Version | NVHOST | Change | CUDA | Decode |
+|---------|--------|--------|------|--------|
+| 5.5.0 | n | Strip `-pg`/`-mrecord-mcount` in clang-oot | ✅ | ~7 tok/s |
+| 5.6.0 | n | Strip `-fpatchable-function-entry=*` in clang-oot | ✅ | ~7 tok/s |
+| 5.7.0 | y | NVHOST=y — nvgpu fails to load (CRC + missing `host1x_fence_extract`) | ❌ | — |
+| 5.8.0 | n | Stable NVHOST=n baseline | ✅ | ~7 tok/s |
+| 5.9.0 | y | OOT host1x built in extension | ❌ error 999 | — |
+| 5.9.1 | y | HOST1X_SYNCPT_GPU flag removed | ❌ error 999 | — |
+| **5.9.2** | **n** | **NVHOST=n + UBSAN fix (stable)** | **✅** | **~7 tok/s** |

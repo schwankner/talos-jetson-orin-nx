@@ -88,8 +88,10 @@ reComputer J4012 which provides NVMe, 2× GbE, and a standard UART TCU connector
 6. [Component Versions](#6-component-versions)
 7. [GPU Verification](#7-gpu-verification)
 8. [GPU Power Modes](#8-gpu-power-modes)
-9. [GPU Generation Speed — Investigation & Roadmap](#9-gpu-generation-speed--investigation--roadmap)
+9. [Known Bugs and Limitations](#9-known-bugs-and-limitations)
 10. [Known Limitations](#10-known-limitations)
+11. [Contributing](#11-contributing)
+12. [References](#12-references)
 11. [Contributing](#11-contributing)
 12. [References](#12-references)
 
@@ -484,84 +486,20 @@ talosctl -n 10.0.10.38 read /sys/devices/system/cpu/online
 
 ---
 
-## 9. GPU Generation Speed — Investigation History
+## 9. Known Bugs and Limitations
 
-### Current Status (nvgpu 5.9.2)
+All non-trivial bugs encountered during development — including the full investigation of
+CUDA error 999, the NVHOST=y attempt history, and the GPU decode speed bottleneck — are
+documented with detailed root-cause analysis in **[BUGS.md](BUGS.md)**.
 
-Ollama (qwen2.5:0.5b, 25/25 layers on CUDA) delivers **~7 tok/s** decode on Jetson
-Orin NX 16 GB. This is a known, accepted limitation — full CUDA correctness was the
-primary goal (CUDA error 999 is now fixed). This section documents the complete
-investigation.
+Notable items relevant to day-to-day use:
 
-### What Was Ruled Out
-
-All of the following were tested and had **no measurable effect** on generation speed:
-
-| Attempted | Result |
-|-----------|--------|
-| GPU clock: 306 MHz → 918 MHz (MAXN) | No change — speed stays at ~7 tok/s |
-| `GGML_CUDA_GRAPHS=1` | No change |
-| `OLLAMA_FLASH_ATTENTION=1` | No change |
-| `OLLAMA_NUM_PARALLEL=1` | No change |
-| `OLLAMA_KV_CACHE_TYPE=q8_0` | No change |
-
-GPU clock having **zero effect** is the key diagnostic: the bottleneck is CPU-side
-overhead between tokens, not GPU compute.
-
-### Root Cause: CPU Overhead in `cudaStreamSynchronize` (NVHOST=n)
-
-With `CONFIG_TEGRA_GK20A_NVHOST=n`, nvgpu uses GPU semaphore buffers (`sema_buf`) for
-stream synchronization instead of host1x hardware syncpoints. The semaphore mechanism
-requires the CPU to actively poll or sleep-wait after each token — introducing
-~130 ms/token overhead in decode.
-
-Evidence:
-- CPU ramps to ~1984 MHz during generation (busy-wait pattern)
-- GPU stays at minimum clock during generation (not compute-bound)
-- Prefill is fast (~110 tok/s) — proves the GPU CUDA compute path works correctly
-
-### Why NVHOST=y Was Attempted and Failed (nvgpu 5.9.0 / 5.9.1)
-
-`CONFIG_TEGRA_GK20A_NVHOST=y` uses host1x hardware syncpoints for `cudaStreamSynchronize`.
-This is the "correct" Tegra path and would eliminate the CPU polling overhead.
-
-**nvgpu 5.9.0** — OOT host1x built and installed in extension to resolve CRC and symbol mismatches.
-CUDA error 999 still occurred: `nvgpu_nvhost_get_syncpt_client_managed()` returned id=0,
-triggering `NVGPU_ERRATA_SYNCPT_INVALID_ID_0` (set for GA10b in `hal_ga10b.c`).
-
-Root cause: OE4T `host1x_syncpt_alloc()` requires nvgpu to be registered as a host1x GPU
-client (via `HOST1X_SYNCPT_GPU` flag) to allocate from the GPU pool. In the upstream
-host1x-next driver model, nvgpu is not registered as a GPU client → alloc returns NULL →
-syncpt id=0 → ERRATA triggers → `nvgpu_channel_sync_syncpt_create()` fails → error 999.
-
-**nvgpu 5.9.1** — Removed `HOST1X_SYNCPT_GPU` flag from `host1x_syncpt_alloc()`.
-Syncpoints now allocated from `CLIENT_MANAGED` pool → id no longer 0 → ERRATA bypassed →
-channel sync created. But CUDA error 999 persisted:
-
-Root cause: The GA10b GPU hardware can only signal syncpoints from the **GPU pool**.
-`CLIENT_MANAGED` syncpoints are never signaled by the GPU → `cudaStreamSynchronize(NULL)`
-and `cudaStreamSynchronize(explicit_stream)` block forever → error 999.
-
-Diagnostic confirmation:
-```
-A: cuStreamSynchronize(NULL)       → 999  (GPU never signals CLIENT_MANAGED syncpt)
-B: cuStreamSynchronize(explicit)   → 999  (same)
-C: cuStreamSynchronize(0x2)        → 0    (driver sentinel, no real syncpt involved)
-```
-
-**nvgpu 5.9.2** — Reverted to `NVHOST=n`. This is the stable solution.
-
-### nvgpu Version History
-
-| Version | NVHOST | Change | CUDA | Decode |
-|---------|--------|--------|------|--------|
-| 5.5.0 | n | Strip `-pg`/`-mrecord-mcount` in clang-oot | ✅ | ~7 tok/s |
-| 5.6.0 | n | Strip `-fpatchable-function-entry=*` in clang-oot | ✅ | ~7 tok/s |
-| 5.7.0 | y | NVHOST=y — nvgpu failed to load (CRC mismatch + missing `host1x_fence_extract`) | ❌ | — |
-| 5.8.0 | n | Stable NVHOST=n baseline | ✅ | ~7 tok/s |
-| 5.9.0 | y | OOT host1x built in extension | ❌ error 999 | — |
-| 5.9.1 | y | HOST1X_SYNCPT_GPU flag removed | ❌ error 999 (CLIENT_MANAGED pool not GPU-signable) | — |
-| **5.9.2** | **n** | **Stable NVHOST=n + UBSAN fix** | **✅** | **~7 tok/s** |
+| # | Issue | Impact | Status |
+|---|-------|--------|--------|
+| [Bug 6](BUGS.md#bug-6--cuda-error-999-cudastreamsynchronize--nvhost-syncpoint) | CUDA error 999 (`cudaStreamSynchronize`) | GPU compute fails | ✅ Fixed — `NVHOST=n` |
+| [Bug 14](BUGS.md#bug-14--cuda-error-999-persists-with-nvhosty-nvgpu-590--591) | CUDA error 999 with NVHOST=y (5.9.0/5.9.1) | GPU pool not signable | ✅ Diagnosed — NVHOST=n stable |
+| [Bug 15](BUGS.md#bug-15--gpu-decode-speed-7-toks-cpu-polling-overhead-with-nvhostn) | GPU decode ~7 tok/s (expected 20–30) | Slow inference | ⚠️ Known — CPU semaphore polling |
+| [Bug 9](BUGS.md#bug-9--ubsan-array-index-out-of-bounds-in-netlistc-non-fatal) | UBSAN `netlist.c:617` at every boot | Log noise | ✅ Silenced (flexible array) |
 
 ---
 
