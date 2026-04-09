@@ -27,6 +27,7 @@
 
 #include <linux/cdev.h>
 #include <linux/dma-fence-array.h>
+#include <linux/fdtable.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/host1x-next.h>
