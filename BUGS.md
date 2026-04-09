@@ -617,7 +617,7 @@ matched → `in_alloc` was never set → the `return host1x_syncpt_id(sp);` repl
 happened → syncpt id=0 was returned to nvgpu → `NVGPU_ERRATA_SYNCPT_INVALID_ID_0` fired →
 error 999.
 
-### Current Fix (nvgpu 5.9.4)
+### nvgpu 5.9.4 — Partial Fix: 2 → 1 nvrm Channel Error
 
 `host1x_syncpt_id(sp)` appears exactly **once** in `nvhost_host1x.c`. Simplified awk to
 match only on `return host1x_syncpt_id\(sp\);` — no two-condition state machine needed:
@@ -626,10 +626,43 @@ match only on `return host1x_syncpt_id\(sp\);` — no two-condition state machin
 awk '/return host1x_syncpt_id\(sp\);/ { ...insert id=0 skip fix...; next } { print }'
 ```
 
-This is robust: the pattern matches regardless of how the `host1x_syncpt_alloc` call above
-it is formatted across lines.
+Patch applied correctly and reduced `Can't initialize nvrm channel` errors from 2 → 1.
+However, CUDA error 999 persisted. One channel still failed.
 
-nvgpu 5.9.2 (NVHOST=n, ~7 tok/s) remains the fallback if 5.9.4 NVHOST=y still fails.
+**Root cause of remaining error:** The nvgpu-level fix in `nvhost_host1x.c` holds id=0
+temporarily and allocates id=1+ for that channel, but after `host1x_syncpt_put(sp_skip)`
+the id=0 slot is freed again. Subsequent channels (or concurrent allocations) get id=0
+again. The OOT host1x `syncpt.c` at commit `ccf7646c` marks syncpt[0] with `name="reserved"`
+but does NOT set `kref=1` — so `host1x_syncpt_alloc`'s loop (`if kref_read(&sp->ref) == 0`)
+can still return id=0 to any caller.
+
+### Current Fix (nvgpu 5.9.5)
+
+Fix at the **host1x level** rather than the nvgpu level. In `syncpt.c`'s init function,
+the OOT host1x at `ccf7646c` does:
+
+```c
+if (host->syncpt_base == 0) {
+    syncpt[0].name = kstrdup("reserved", GFP_KERNEL);
+    // kref NOT initialized → kref_read() == 0 → still allocatable!
+}
+```
+
+Add `kref_init(&syncpt[0].ref)` **before** the name assignment. This sets the refcount
+to 1 permanently, so `host1x_syncpt_alloc`'s free-slot scan skips id=0 for all callers
+(nvgpu channels, any direct userspace alloc, etc.):
+
+```c
+if (host->syncpt_base == 0) {
+    kref_init(&syncpt[0].ref);    // ← added: permanently reserves id=0
+    syncpt[0].name = kstrdup("reserved", GFP_KERNEL);
+}
+```
+
+This matches what newer OE4T commits (e.g. `6e071c0`) already do. The fix is applied via
+`sed` in the pkg.yaml prepare step, guarded to be idempotent.
+
+nvgpu 5.9.2 (NVHOST=n, ~7 tok/s) remains the fallback if 5.9.5 NVHOST=y still fails.
 
 ### nvgpu Version History
 
@@ -643,4 +676,5 @@ nvgpu 5.9.2 (NVHOST=n, ~7 tok/s) remains the fallback if 5.9.4 NVHOST=y still fa
 | 5.9.1 | y | HOST1X_SYNCPT_GPU flag removed → CLIENT_MANAGED not GPU-signable | ❌ error 999 | — |
 | 5.9.2 | n | NVHOST=n + UBSAN fix (stable fallback) | ✅ | ~7 tok/s |
 | 5.9.3 | y | OOT host1x + id=0 skip awk (flags on 2 lines → awk never matched) | ❌ error 999 | — |
-| **5.9.4** | **y** | **Fix awk: match `return host1x_syncpt_id(sp)` directly** | **⏳ testing** | **TBD** |
+| 5.9.4 | y | Fix awk: match `return host1x_syncpt_id(sp)` directly → 2→1 nvrm errors | ❌ error 999 | — |
+| **5.9.5** | **y** | **Fix host1x syncpt.c: `kref_init(&syncpt[0].ref)` → id=0 permanently reserved** | **⏳ testing** | **TBD** |
