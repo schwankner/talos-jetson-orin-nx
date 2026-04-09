@@ -24,11 +24,11 @@ steps:
         sha256: "96c7656bdad0bf330e7fd58981b8a4eec4717a76840cefbe84e720d88b46be55"
         sha512: "971b91fcae284c59dbe411356109bce9b1a7884b8fac41c9683c79bf3eddef606e71ebaa9c06ad2389b2ba382c3c1125fabe0cbaeb5edac857e218077ed24ef9"
       # nvhost-ctrl-shim: /dev/nvhost-ctrl with NVHOST ioctl API (bridges to OOT host1x)
-      # Pinned to commit f5b2a75 — update url+sha when nvhost_ctrl_shim.c changes
-      - url: https://github.com/schwankner/talos-jetson-orin-nx/raw/f5b2a752109e99987a537bd25baff0816f099b22/nvhost-ctrl-shim/nvhost_ctrl_shim.c
+      # Pinned to commit dbf8791 — update url+sha when nvhost_ctrl_shim.c changes
+      - url: https://github.com/schwankner/talos-jetson-orin-nx/raw/dbf87911aec6c6ce6b68ded694dc45cb04ccb095/nvhost-ctrl-shim/nvhost_ctrl_shim.c
         destination: nvhost_ctrl_shim.c
-        sha256: "15b20907163916d5e43b05d60e008b0b769409e5afd2f738513fa442231ac42b"
-        sha512: "a18d4a6e7dd49793e860765faa12a4f3138532c02ac1db14855ff12303812c0f452b6d86996c3ffcdaca4bef206ebf2e4e63ebcfc7e8743ca3be9f0f0dcfbc31"
+        sha256: "7935f0db49aaaba090722e2b53633de3c1e05164451d198aff91f64360f9562a"
+        sha512: "05fbcd8746230a862b3508eead835d919ff6e1f12e3f5f41ccca3b6f1876a33cf3b2f8ca1d54e31662d86e9ee7049240f07b18c1905fe687fe26fcf98644c732"
     env:
       ARCH: arm64
       LLVM: "1"
