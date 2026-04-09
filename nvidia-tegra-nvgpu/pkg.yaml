@@ -23,6 +23,12 @@ steps:
         destination: hwpm.tar.gz
         sha256: "96c7656bdad0bf330e7fd58981b8a4eec4717a76840cefbe84e720d88b46be55"
         sha512: "971b91fcae284c59dbe411356109bce9b1a7884b8fac41c9683c79bf3eddef606e71ebaa9c06ad2389b2ba382c3c1125fabe0cbaeb5edac857e218077ed24ef9"
+      # nvhost-ctrl-shim: /dev/nvhost-ctrl with NVHOST ioctl API (bridges to OOT host1x)
+      # Pinned to commit f5b2a75 — update url+sha when nvhost_ctrl_shim.c changes
+      - url: https://github.com/schwankner/talos-jetson-orin-nx/raw/f5b2a752109e99987a537bd25baff0816f099b22/nvhost-ctrl-shim/nvhost_ctrl_shim.c
+        destination: nvhost_ctrl_shim.c
+        sha256: "15b20907163916d5e43b05d60e008b0b769409e5afd2f738513fa442231ac42b"
+        sha512: "a18d4a6e7dd49793e860765faa12a4f3138532c02ac1db14855ff12303812c0f452b6d86996c3ffcdaca4bef206ebf2e4e63ebcfc7e8743ca3be9f0f0dcfbc31"
     env:
       ARCH: arm64
       LLVM: "1"
@@ -36,6 +42,10 @@ steps:
         tar xzf hwpm.tar.gz -C /oot-src/hwpm --strip-components=1
         echo "Sources extracted:"
         ls /oot-src/
+        # nvhost-ctrl-shim C source (fetched by bldr, available as nvhost_ctrl_shim.c)
+        mkdir -p /oot-src/nvhost-ctrl-shim
+        cp nvhost_ctrl_shim.c /oot-src/nvhost-ctrl-shim/nvhost_ctrl_shim.c
+        echo "nvhost-ctrl-shim source ready ($(wc -l < /oot-src/nvhost-ctrl-shim/nvhost_ctrl_shim.c) lines)"
     build:
       - |
         echo "Building NVIDIA conftest (kernel compat detection)..."
@@ -278,11 +288,8 @@ steps:
         # Makefile — use printf (heredocs incompatible with YAML literal blocks)
         printf 'obj-m += nvhost_ctrl_shim.o\nccflags-y += -I$(src)/../nvidia-oot/drivers/gpu/host1x/include\n' \
           > "${SHIM_DIR}/Makefile"
-        # C source — download from repo (committed at nvhost-ctrl-shim/nvhost_ctrl_shim.c)
-        curl -fsSL \
-          "https://raw.githubusercontent.com/schwankner/talos-jetson-orin-nx/main/nvhost-ctrl-shim/nvhost_ctrl_shim.c" \
-          -o "${SHIM_DIR}/nvhost_ctrl_shim.c"
-        echo "nvhost-ctrl-shim: source fetched ($(wc -l < "${SHIM_DIR}/nvhost_ctrl_shim.c") lines)"
+        # C source — pre-fetched by bldr (sources: entry), available at /oot-src/nvhost-ctrl-shim/
+        echo "nvhost-ctrl-shim: source ready ($(wc -l < "${SHIM_DIR}/nvhost_ctrl_shim.c") lines)"
         make -j$(nproc) ARCH=arm64 \
           -C /src \
           M="${SHIM_DIR}" \
