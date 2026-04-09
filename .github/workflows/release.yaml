@@ -109,7 +109,6 @@ jobs:
               - firmware_class.path=/usr/lib/firmware
           output:
             kind: installer
-            outFormat: docker
           EOF
           )
 
@@ -124,9 +123,12 @@ jobs:
           echo "Installer imager output:"
           ls -lh "${INSTALLER_OUT}/"
 
-          INSTALLER_TAR=$(ls "${INSTALLER_OUT}"/*.tar 2>/dev/null | head -1)
+          # Imager may produce .tar, .oci, or a file without extension — find it
+          INSTALLER_TAR=$(ls "${INSTALLER_OUT}"/*.tar "${INSTALLER_OUT}"/*.oci \
+            "${INSTALLER_OUT}"/*installer* 2>/dev/null | head -1)
           [[ -f "${INSTALLER_TAR}" ]] \
-            || { echo "ERROR: no .tar found in ${INSTALLER_OUT}"; ls "${INSTALLER_OUT}/"; exit 1; }
+            || { echo "ERROR: no installer archive found in ${INSTALLER_OUT}"; exit 1; }
+          echo "Loading: ${INSTALLER_TAR}"
 
           docker load < "${INSTALLER_TAR}"
 
