@@ -46,6 +46,7 @@ __MACOSX/
 
 # ── Claude Code internal state ────────────────────────────────────────────────
 .claude/
+CLAUDE.md
 
 # ── Day-2 / cluster-ops (kept locally only, not needed for image build) ──────
 # manifests/  → not needed for building images; kept locally for cluster-ops
