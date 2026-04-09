@@ -28,7 +28,7 @@ LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
 LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.9.2}"          # .../ 5.7.0 (NVHOST=y broken: OOT host1x not overriding in-tree) / 5.8.0 (NVHOST=n stable) / 5.9.0 (NVHOST=y: OOT host1x installed at kernel/ path to replace in-tree via squashfs overlay) / 5.9.1 (HOST1X_SYNCPT_GPU removed → but CLIENT_MANAGED syncpts still not GPU-signalable → error 999 persists) / 5.9.2 (NVHOST=n: GPU semaphore sync, no host1x dependency → stable CUDA)
+NVGPU_VERSION="${NVGPU_VERSION:-5.9.3}"          # .../ 5.8.0 (NVHOST=n stable) / 5.9.0 (NVHOST=y: OOT host1x installed, syncpt id=0 → ERRATA → error 999) / 5.9.1 (HOST1X_SYNCPT_GPU removed → CLIENT_MANAGED not GPU-signable → error 999) / 5.9.2 (NVHOST=n: GPU semaphore sync, stable) / 5.9.3 (NVHOST=y: OOT host1x + nvhost_host1x.c id=0 skip patch → hardware syncpoints, faster decode)
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 
