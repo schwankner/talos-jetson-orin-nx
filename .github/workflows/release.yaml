@@ -109,6 +109,7 @@ jobs:
               - firmware_class.path=/usr/lib/firmware
           output:
             kind: installer
+            outFormat: raw
           EOF
           )
 
@@ -123,23 +124,23 @@ jobs:
           echo "Installer imager output:"
           ls -lh "${INSTALLER_OUT}/"
 
-          # Imager may produce .tar, .oci, or a file without extension — find it
-          INSTALLER_TAR=$(ls "${INSTALLER_OUT}"/*.tar "${INSTALLER_OUT}"/*.oci \
-            "${INSTALLER_OUT}"/*installer* 2>/dev/null | head -1)
+          # Talos imager produces installer-arm64.tar (outFormat: raw keeps .tar extension)
+          # The tar embeds the baseInstaller imageRef tag as the image name
+          INSTALLER_TAR="${INSTALLER_OUT}/installer-arm64.tar"
           [[ -f "${INSTALLER_TAR}" ]] \
-            || { echo "ERROR: no installer archive found in ${INSTALLER_OUT}"; exit 1; }
-          echo "Loading: ${INSTALLER_TAR}"
+            || { echo "ERROR: installer-arm64.tar not found; files:"; ls "${INSTALLER_OUT}/"; exit 1; }
 
           docker load < "${INSTALLER_TAR}"
 
-          # Talos imager tags the loaded installer as ghcr.io/siderolabs/installer:${TALOS_VERSION}
-          # Re-tag and push as our versioned image.
-          LOADED_TAG="ghcr.io/siderolabs/installer:${TALOS_VERSION}"
+          # Imager embeds baseInstaller imageRef as the loaded tag:
+          # ghcr.io/<owner>/custom-installer:<talos>-<kernel>  (base, no nvgpu suffix)
+          LOADED_TAG="ghcr.io/${{ github.repository_owner }}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}"
           if ! docker image inspect "${LOADED_TAG}" >/dev/null 2>&1; then
+            # Fallback: search for any recently-loaded installer image
             LOADED_TAG=$(docker images --format "{{.Repository}}:{{.Tag}}" \
-              | grep -E "installer" | grep -v "${TALOS_VERSION}-${KERNEL_VERSION}" | head -1)
+              | grep "installer" | grep "${TALOS_VERSION}" | head -1)
             [[ -n "${LOADED_TAG}" ]] \
-              || { echo "ERROR: could not identify loaded installer image"; docker images; exit 1; }
+              || { echo "ERROR: could not find loaded installer image"; docker images; exit 1; }
           fi
 
           docker tag "${LOADED_TAG}" "${INSTALLER_TAG}"
