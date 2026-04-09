@@ -32,7 +32,7 @@ jobs:
 
     permissions:
       contents: write
-      packages: read
+      packages: write
 
     steps:
       - name: Checkout
@@ -61,6 +61,88 @@ jobs:
       - name: Build UKI + USB image
         run: make usb
         timeout-minutes: 30
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
+
+      - name: Build versioned installer image for talosctl upgrade
+        # Produces custom-installer:<talos>-<kernel>-nvgpu<nvgpu> — the full installer
+        # with all extensions embedded. Required by `talosctl upgrade --image ...`.
+        # The bare custom-installer:<talos>-<kernel> (no nvgpu suffix) built by
+        # build-extensions.sh is only the base kernel; this step bakes the
+        # extensions in via the Talos imager output.kind=installer.
+        run: |
+          source scripts/common.sh
+          INSTALLER_TAG="ghcr.io/${{ github.repository_owner }}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}-nvgpu${NVGPU_VERSION}"
+          CUSTOM_IMAGER_TAG="custom-imager:${TALOS_VERSION}-llvm"
+          INSTALLER_OUT="$(pwd)/dist/installer-out"
+          mkdir -p "${INSTALLER_OUT}"
+
+          # Same profile as build-uki.sh but output.kind=installer + outFormat=docker
+          PROFILE=$(cat <<EOF
+          arch: arm64
+          platform: metal
+          secureboot: false
+          version: ${TALOS_VERSION}
+          input:
+            kernel:
+              path: /usr/install/arm64/vmlinuz
+            initramfs:
+              path: /usr/install/arm64/initramfs.xz
+            sdStub:
+              path: /usr/install/arm64/systemd-stub.efi
+            sdBoot:
+              path: /usr/install/arm64/systemd-boot.efi
+            baseInstaller:
+              imageRef: ghcr.io/${{ github.repository_owner }}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}
+              forceInsecure: false
+            systemExtensions:
+              - imageRef: ghcr.io/${{ github.repository_owner }}/kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos
+                forceInsecure: false
+              - imageRef: ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos
+                forceInsecure: false
+              - imageRef: ghcr.io/${{ github.repository_owner }}/nvidia-firmware-ext:${FIRMWARE_EXT_TAG}
+                forceInsecure: false
+          customization:
+            extraKernelArgs:
+              - console=ttyTCU0,115200
+              - firmware_class.path=/usr/lib/firmware
+          output:
+            kind: installer
+            outFormat: docker
+          EOF
+          )
+
+          echo "${PROFILE}" | docker run --rm -i \
+            --platform linux/arm64 \
+            --add-host host.docker.internal:host-gateway \
+            -v "${INSTALLER_OUT}:/out" \
+            -v "${HOME}/.docker/config.json:/root/.docker/config.json:ro" \
+            "${CUSTOM_IMAGER_TAG}" \
+            -
+
+          echo "Installer imager output:"
+          ls -lh "${INSTALLER_OUT}/"
+
+          INSTALLER_TAR=$(ls "${INSTALLER_OUT}"/*.tar 2>/dev/null | head -1)
+          [[ -f "${INSTALLER_TAR}" ]] \
+            || { echo "ERROR: no .tar found in ${INSTALLER_OUT}"; ls "${INSTALLER_OUT}/"; exit 1; }
+
+          docker load < "${INSTALLER_TAR}"
+
+          # Talos imager tags the loaded installer as ghcr.io/siderolabs/installer:${TALOS_VERSION}
+          # Re-tag and push as our versioned image.
+          LOADED_TAG="ghcr.io/siderolabs/installer:${TALOS_VERSION}"
+          if ! docker image inspect "${LOADED_TAG}" >/dev/null 2>&1; then
+            LOADED_TAG=$(docker images --format "{{.Repository}}:{{.Tag}}" \
+              | grep -E "installer" | grep -v "${TALOS_VERSION}-${KERNEL_VERSION}" | head -1)
+            [[ -n "${LOADED_TAG}" ]] \
+              || { echo "ERROR: could not identify loaded installer image"; docker images; exit 1; }
+          fi
+
+          docker tag "${LOADED_TAG}" "${INSTALLER_TAG}"
+          docker push "${INSTALLER_TAG}"
+          echo "✓ Pushed: ${INSTALLER_TAG}"
         env:
           REGISTRY: ghcr.io/${{ github.repository_owner }}
           REGISTRY_DOCKER: ghcr.io/${{ github.repository_owner }}
