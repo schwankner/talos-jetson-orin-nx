@@ -28,7 +28,7 @@ LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
 LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.10.0}"         # .../ 5.9.5 (kref_init already present in OE4T ccf7646c; L4T nvhost blocker confirmed — NVHOST=y + shim needed) / 5.10.0 (nvhost_ctrl_shim.ko: real /dev/nvhost-ctrl with NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE + SYNC_FILE_EXTRACT → hardware syncpoint interrupts for cudaStreamSynchronize → target 20–30 tok/s)
+NVGPU_VERSION="${NVGPU_VERSION:-5.10.1}"         # .../ 5.10.0 (nvhost_ctrl_shim.ko first working version) / 5.10.1 (shim: debug logging, GET_VERSION=1, pr_err on syncpt lookup miss)
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 
