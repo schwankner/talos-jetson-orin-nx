@@ -96,3 +96,8 @@ else
 fi
 
 info "Signing key setup complete. Serial: ${SERIAL}"
+
+# ── Git: enforce signed commits for this repository ──────────────────────────
+git config core.hooksPath .githooks
+git config commit.gpgSign true
+info "Git hooks activated (.githooks/) and commit.gpgSign=true set for this repo."
