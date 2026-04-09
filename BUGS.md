@@ -592,12 +592,20 @@ Evidence:
 which would eliminate the per-token CPU polling. Both attempts ended with CUDA error 999 —
 documented in full in **[Bug 14](#bug-14--cuda-error-999-persists-with-nvhost=y-nvgpu-590--591)**.
 
-### Current Status
+### Current Status (nvgpu 5.9.3 — in progress)
 
-NVHOST=n is the stable configuration (nvgpu 5.9.2). The ~7 tok/s decode rate is an accepted
-limitation while NVHOST=y remains broken on upstream kernels. A future fix would require
-either making the GA10b GPU pool available to nvgpu via the upstream host1x-next model, or
-backporting host1x GPU client registration support.
+nvgpu 5.9.3 attempts to fix the root cause: NVHOST=y + OOT host1x + patch to skip syncpt id=0.
+
+**Root cause of 5.9.0 error 999 (now understood):**
+`host1x_syncpt_alloc(..., HOST1X_SYNCPT_GPU, ...)` allocates from the first free syncpoint
+starting at `syncpt_base=0` when no "gpu" pool is defined in the device tree → returns id=0.
+nvgpu rejects id=0 due to `NVGPU_ERRATA_SYNCPT_INVALID_ID_0` (GA10b) → channel sync fails.
+
+**5.9.3 fix:** allocate id=0 temporarily to advance the allocator past the reserved slot,
+then allocate again → id≥1. The Tegra234 syncpoint shim covers all 1024 syncpoints so any
+non-zero id is GPU-signable via hardware interrupt (no CPU polling).
+
+nvgpu 5.9.2 (NVHOST=n) remains the fallback if 5.9.3 NVHOST=y still fails.
 
 ### nvgpu Version History
 
@@ -607,6 +615,7 @@ backporting host1x GPU client registration support.
 | 5.6.0 | n | Strip `-fpatchable-function-entry=*` in clang-oot | ✅ | ~7 tok/s |
 | 5.7.0 | y | NVHOST=y — nvgpu fails to load (CRC + missing `host1x_fence_extract`) | ❌ | — |
 | 5.8.0 | n | Stable NVHOST=n baseline | ✅ | ~7 tok/s |
-| 5.9.0 | y | OOT host1x built in extension | ❌ error 999 | — |
-| 5.9.1 | y | HOST1X_SYNCPT_GPU flag removed | ❌ error 999 | — |
-| **5.9.2** | **n** | **NVHOST=n + UBSAN fix (stable)** | **✅** | **~7 tok/s** |
+| 5.9.0 | y | OOT host1x built — syncpt id=0 returned → ERRATA → error 999 | ❌ error 999 | — |
+| 5.9.1 | y | HOST1X_SYNCPT_GPU flag removed → CLIENT_MANAGED not GPU-signable | ❌ error 999 | — |
+| 5.9.2 | n | NVHOST=n + UBSAN fix (stable fallback) | ✅ | ~7 tok/s |
+| **5.9.3** | **y** | **OOT host1x + nvhost_host1x.c id=0 skip patch** | **⏳ testing** | **TBD** |

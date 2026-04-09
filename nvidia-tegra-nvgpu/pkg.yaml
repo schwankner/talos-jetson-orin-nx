@@ -197,9 +197,21 @@ steps:
         NVIDIA_CONFTEST=/oot-src/out/nvidia-conftest
         touch /oot-src/out/nvidia-linux-header/Module.symvers.nvidia
 
-        # ── OOT host1x: SKIPPED (NVHOST=n — nvgpu uses GPU semaphores, no host1x dependency) ──
-        # With CONFIG_TEGRA_GK20A_NVHOST=n nvgpu does not reference any host1x symbols,
-        # so we do not build or install OOT host1x / host1x-fence.
+        # ── OOT host1x: provides host1x_syncpt_alloc with HOST1X_SYNCPT_GPU support ──
+        # Required for CONFIG_TEGRA_GK20A_NVHOST=y. The OE4T host1x replaces the in-tree
+        # host1x at boot (installed at kernel/drivers/gpu/host1x/ path via squashfs overlay).
+        echo "=== Building OOT host1x ==="
+        make -j $(nproc) ARCH=arm64 \
+          -C /src \
+          M=${NVIDIA_OOT}/drivers/gpu/host1x \
+          CC=/usr/local/bin/clang-oot \
+          CONFIG_TEGRA_OOT_MODULE=m \
+          srctree.nvidia-oot=${NVIDIA_OOT} \
+          srctree.nvconftest=${NVIDIA_CONFTEST} \
+          LLVM=1 \
+          modules 2>&1 | tee /tmp/build-host1x.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "host1x: OK" || { echo "host1x: BUILD FAILED (see errors above)"; exit 1; }
+        cat ${NVIDIA_OOT}/drivers/gpu/host1x/Module.symvers \
+          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
 
         # ── mc-utils: provides emc_freq_to_bw ──
         echo "=== Building mc-utils ==="
@@ -215,7 +227,19 @@ steps:
         cat ${NVIDIA_OOT}/drivers/platform/tegra/mc-utils/Module.symvers \
           >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
 
-        # ── host1x-fence: SKIPPED (NVHOST=n — not needed without host1x syncpoints) ──
+        # ── host1x-fence: provides host1x_fence_extract (required by nvgpu NVHOST=y) ──
+        echo "=== Building OOT host1x-fence ==="
+        make -j $(nproc) ARCH=arm64 \
+          -C /src \
+          M=${NVIDIA_OOT}/drivers/gpu/host1x-fence \
+          CC=/usr/local/bin/clang-oot \
+          CONFIG_TEGRA_OOT_MODULE=m \
+          srctree.nvidia-oot=${NVIDIA_OOT} \
+          srctree.nvconftest=${NVIDIA_CONFTEST} \
+          LLVM=1 \
+          modules 2>&1 | tee /tmp/build-host1x-fence.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "host1x-fence: OK" || { echo "host1x-fence: BUILD FAILED (see errors above)"; exit 1; }
+        cat ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Module.symvers \
+          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
 
         # ── nvmap: provides tegra_vpr_dev, nvmap_dma_alloc_attrs, nvmap_dma_free_attrs ──
         echo "=== Building nvmap ==="
@@ -282,14 +306,39 @@ steps:
         grep -rl "class_create(THIS_MODULE," /oot-src/nvgpu/drivers/gpu/nvgpu/ \
           | xargs -r sed -i 's/class_create(THIS_MODULE, /class_create(/g'
         echo "Patched nvgpu files: class_create kernel 6.4+ compat"
-        # platform_ga10b_tegra.c: guard nvgpu_nvhost_syncpt_init with CONFIG_TEGRA_GK20A_NVHOST.
-        # This call is unguarded in OE4T d530a48; with NVHOST=n the function has no stub
-        # → compile error "call to undeclared function". The guard makes the call disappear
-        # when NVHOST=n so nvgpu compiles cleanly with GPU semaphore sync.
-        # (nvgpu_free_nvhost_dev at line 337 is already guarded in the OE4T source.)
-        GA10B=/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/platform_ga10b_tegra.c
-        awk '/nvgpu_nvhost_syncpt_init\(platform->g\)/{print "#ifdef CONFIG_TEGRA_GK20A_NVHOST"; in_syncpt=1} {print} in_syncpt && /^\t\}$/{print "#endif /* CONFIG_TEGRA_GK20A_NVHOST */"; in_syncpt=0}' "$GA10B" > "$GA10B.tmp" && mv "$GA10B.tmp" "$GA10B"
-        echo "Patched platform_ga10b_tegra.c: nvgpu_nvhost_syncpt_init wrapped in NVHOST guard (NVHOST=n compat)"
+        # nvhost_host1x.c: skip syncpt id=0 — GA10b ERRATA_SYNCPT_INVALID_ID_0 workaround.
+        # With NVHOST=y, nvgpu calls host1x_syncpt_alloc(HOST1X_SYNCPT_CLIENT_MANAGED |
+        # HOST1X_SYNCPT_GPU). When no "gpu" pool is defined in the DT, host1x starts
+        # allocating from syncpt_base=0 → returns id=0. nvgpu rejects id=0 due to
+        # NVGPU_ERRATA_SYNCPT_INVALID_ID_0 (GA10b) → channel sync creation fails → error 999.
+        # Fix: allocate id=0 temporarily to advance past the reserved slot, then allocate
+        # again → id=1 (or first free non-zero id). The Tegra234 syncpoint shim covers all
+        # 1024 syncpoints so any non-zero id is GPU-signable.
+        NVHOST_H1X=/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/nvhost_host1x.c
+        awk '
+/HOST1X_SYNCPT_CLIENT_MANAGED \| HOST1X_SYNCPT_GPU,/ { in_alloc=1 }
+in_alloc && /return host1x_syncpt_id\(sp\);/ {
+    print "\t/* nvgpu 5.9.3: skip syncpt id=0 (NVGPU_ERRATA_SYNCPT_INVALID_ID_0 on GA10b)."
+    print "\t * host1x returns id=0 when GPU pool absent in DT and syncpt_base=0."
+    print "\t * Hold id=0 to advance allocator, then re-allocate to get a valid non-zero id."
+    print "\t * Tegra234 syncpt shim maps all 1024 ids so any id>=1 is GPU-signable. */"
+    print "\tif (host1x_syncpt_id(sp) == 0U) {"
+    print "\t\tstruct host1x_syncpt *sp_skip = sp;"
+    print "\t\tsp = host1x_syncpt_alloc(host1x,"
+    print "\t\t\t\tHOST1X_SYNCPT_CLIENT_MANAGED | HOST1X_SYNCPT_GPU,"
+    print "\t\t\t\tsyncpt_name);"
+    print "\t\thost1x_syncpt_put(sp_skip);"
+    print "\t\tif (!sp)"
+    print "\t\t\treturn 0;"
+    print "\t}"
+    print ""
+    print "\treturn host1x_syncpt_id(sp);"
+    in_alloc=0
+    next
+}
+{ print }
+' "$NVHOST_H1X" > "$NVHOST_H1X.tmp" && mv "$NVHOST_H1X.tmp" "$NVHOST_H1X"
+        echo "Patched nvhost_host1x.c: added syncpt id=0 skip (GA10b ERRATA_SYNCPT_INVALID_ID_0 workaround)"
         # netlist.c: fix UBSAN array-index-out-of-bounds false positive.
         # struct netlist_image declares regions[1] (fixed size) but the loop iterates
         # over all regions from the firmware (header.regions >> 1). UBSAN fires for
@@ -314,7 +363,8 @@ steps:
           CC=/usr/local/bin/clang-oot \
           CONFIG_TEGRA_OOT_MODULE=m \
           CONFIG_GK20A=m \
-          CONFIG_TEGRA_GK20A_NVHOST=n \
+          CONFIG_TEGRA_GK20A_NVHOST=y \
+          CONFIG_TEGRA_GK20A_NVHOST_HOST1X=y \
           CONFIG_TEGRA_HWPM=n \
           srctree.nvgpu=/oot-src/nvgpu \
           srctree.nvidia=/oot-src/nvidia-oot \
@@ -335,7 +385,15 @@ steps:
         find /oot-src/nvgpu -name "*.ko" \
           -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \;
 
-        # OOT host1x: NOT installed (NVHOST=n — in-tree host1x used by kernel, nvgpu ignores it)
+        # OOT host1x: install at kernel/drivers/gpu/host1x/ to shadow the in-tree host1x.ko
+        # The squashfs overlay replaces the in-tree module so nvgpu's NVHOST=y path gets
+        # the OE4T host1x with HOST1X_SYNCPT_GPU support instead of the upstream stub.
+        mkdir -p /rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/drivers/gpu/host1x
+        find /oot-src/nvidia-oot/drivers/gpu/host1x -name "host1x.ko" \
+          -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/drivers/gpu/host1x/ \;
+        # host1x-fence goes to extra/ (no in-tree equivalent)
+        find /oot-src/nvidia-oot/drivers/gpu/host1x-fence -name "*.ko" \
+          -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \;
 
         # All nvidia-oot modules go to extra/ as usual
         find /oot-src/nvidia-oot -name "*.ko" \
@@ -356,7 +414,7 @@ steps:
           echo "WARNING: No fixed signing key found — using kernel-generated key (may not match running kernel)"
         fi
         echo "Signing kernel modules..."
-        find /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \
+        find /rootfs/usr/lib/modules/${KERNEL_RELEASE}/ \
              -name "*.ko" 2>/dev/null | while read ko; do
           /src/scripts/sign-file sha512 \
             /src/certs/signing_key.pem \
@@ -365,10 +423,11 @@ steps:
           echo "  Signed: ${ko}"
         done
 
-        # Load order (NVHOST=n: no host1x/host1x-fence dependency):
-        # mc-utils provides emc_freq_to_bw; nvmap provides GPU memory allocator; nvgpu last.
+        # Load order (NVHOST=y: host1x must load before host1x-fence and nvgpu):
+        # host1x provides syncpoint alloc; host1x-fence provides fence extract;
+        # nvmap provides GPU memory; mc-utils provides emc_freq_to_bw; nvgpu last.
         mkdir -p /rootfs/usr/lib/modprobe.d
-        printf 'softdep nvgpu pre: nvmap mc-utils\n' \
+        printf 'softdep nvgpu pre: host1x nvmap host1x-fence mc-utils\n' \
           > /rootfs/usr/lib/modprobe.d/nvidia-tegra.conf
 
         # Also export vmlinuz.efi + signing key so the build script can build
