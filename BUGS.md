@@ -479,3 +479,75 @@ of the nvgpu extension so the corrected path is included in the new image.
 **Expected outcome (run 20)**: kmod reads the softdep at boot; when udev triggers
 nvgpu's alias, modprobe loads `host1x`, `nvmap`, `host1x-fence`, `mc-utils` first,
 then nvgpu — all missing-symbol errors should disappear.
+
+---
+
+## Bug 14 — CUDA Error 999 Persists with NVHOST=y (nvgpu 5.9.0 / 5.9.1)
+
+**Symptom**: After enabling `CONFIG_TEGRA_GK20A_NVHOST=y` and building an OOT host1x
+to resolve CRC mismatches (Bug 6 / nvgpu 5.9.0), `cudaStreamSynchronize` still
+returns error 999 (`CUDA_ERROR_UNKNOWN`) for NULL streams and explicit streams.
+Only `cudaStreamPerThread` (handle `0x2`) succeeded via the driver API.
+
+```
+A: cuStreamSynchronize(NULL stream)       → 999  ← FAILS
+B: cuStreamSynchronize(explicit stream)   → 999  ← FAILS
+C: cuStreamSynchronize(0x2 per-thread)   → 0    ← SUCCESS (driver sentinel only)
+```
+
+### nvgpu 5.9.0 — Root Cause: Syncpoint id=0 (NVGPU_ERRATA_SYNCPT_INVALID_ID_0)
+
+With `NVHOST=y`, `cudaStreamSynchronize` uses host1x hardware syncpoints.
+The call chain is:
+
+```
+nvgpu_channel_sync_syncpt_create()
+  → nvgpu_nvhost_get_syncpt_client_managed()
+      → host1x_syncpt_alloc(host1x, HOST1X_SYNCPT_CLIENT_MANAGED | HOST1X_SYNCPT_GPU, name)
+```
+
+`HOST1X_SYNCPT_GPU` tells `host1x_syncpt_alloc()` to allocate from the GPU pool.
+In the OE4T upstream host1x-next driver model, nvgpu is not registered as a host1x
+GPU client — so the GPU pool iterator finds nothing and returns `NULL`.
+
+`nvgpu_nvhost_get_syncpt_client_managed()` converts `NULL` → id `0`.
+GA10b has `NVGPU_ERRATA_SYNCPT_INVALID_ID_0` set in `hal_ga10b.c`:
+
+```c
+if ((nvgpu_is_errata_present(c->g, NVGPU_ERRATA_SYNCPT_INVALID_ID_0)) && (sp->id == 0U)) {
+    nvgpu_err(c->g, "failed to get free syncpt");
+    goto err_free;  // → channel sync creation fails → error 999
+}
+```
+
+### nvgpu 5.9.1 — Root Cause: CLIENT_MANAGED Syncpoints Not GPU-Signable
+
+**Attempted fix**: Remove `HOST1X_SYNCPT_GPU` flag from `host1x_syncpt_alloc()` in
+`nvhost_host1x.c` so it allocates from the `CLIENT_MANAGED` pool instead of the GPU pool.
+Syncpoint id is now non-zero → ERRATA check passes → channel sync created successfully.
+
+**Why error 999 persisted**: The GA10b GPU hardware can only signal syncpoints from the
+**GPU pool**. Syncpoints allocated from the `CLIENT_MANAGED` pool are never signaled by
+the GPU hardware. When `cudaStreamSynchronize` is called, the driver waits for the GPU to
+increment the CLIENT_MANAGED syncpoint — which never happens → timeout → error 999.
+
+`cudaStreamPerThread` (handle `0x2`) is a special CUDA runtime sentinel, not a real stream
+with a syncpoint. The driver routes it through a per-thread implicit stream that does not
+rely on host1x syncpoint signaling — hence it succeeded while all other streams failed.
+
+### Fix (nvgpu 5.9.2): Revert to NVHOST=n
+
+`CONFIG_TEGRA_GK20A_NVHOST=n` makes nvgpu use GPU semaphore buffers (`sema_buf`) for
+stream synchronization. No host1x syncpoints involved. This was the stable path in 5.8.0.
+
+**Additional patch required**: `nvgpu_nvhost_syncpt_init()` in
+`platform_ga10b_tegra.c:281` (OE4T d530a48) is unguarded — with NVHOST=n the function
+has no stub and the build fails with:
+```
+platform_ga10b_tegra.c:281:8: error: call to undeclared function 'nvgpu_nvhost_syncpt_init'
+```
+Fix: wrap the call in `#ifdef CONFIG_TEGRA_GK20A_NVHOST` via awk in `pkg.yaml`.
+
+**Result**: CUDA error 999 fully resolved. Ollama 25/25 GPU layers, HTTP 200, ~7 tok/s decode.
+The `Can't initialize nvrm channel` warning remains (libcuda.so discovery phase) but is
+non-fatal — GPU channels are created successfully via the NVHOST=n semaphore path.
