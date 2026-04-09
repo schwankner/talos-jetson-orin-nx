@@ -106,6 +106,13 @@ steps:
           >> ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Makefile
         printf 'ccflags-y += -I$(srctree.nvidia-oot)/drivers/gpu/host1x/include\n' \
           >> ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Makefile
+        # kernel 6.4+: class_create(THIS_MODULE, name) → class_create(name)
+        grep -rl "class_create(THIS_MODULE," ${NVIDIA_OOT}/drivers/gpu/host1x-fence/ \
+          | xargs -r sed -i 's/class_create(THIS_MODULE, /class_create(/g'
+        # kernel 6.x: devnode callback takes const struct device * (not struct device *)
+        grep -rl "host1x_fence_devnode" ${NVIDIA_OOT}/drivers/gpu/host1x-fence/ \
+          | xargs -r sed -i 's/static char \*host1x_fence_devnode(struct device \*/static char *host1x_fence_devnode(const struct device */g'
+        echo "Patched host1x-fence: class_create + devnode const fixes for kernel 6.x"
 
         # nvmap: remove subdir -Werror, add conftest + nvidia-oot includes
         sed -i 's|subdir-ccflags-y += -Werror||g' \
