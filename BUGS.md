@@ -812,3 +812,40 @@ args.value = host1x_syncpt_read(sp);
 ```
 
 Implement `GET_CHARACTERISTICS` returning Orin hardware values (704 syncpoints).
+
+---
+
+## Bug 18: nvgpu-Shim-Quellcode-Pin in pkg.yaml nicht aktualisiert (5.10.3)
+
+**Status:** ✅ BEHOBEN in 5.10.4
+
+**Symptom:** nvgpu 5.10.3 geladen, `/dev/nvhost-ctrl` vorhanden, aber dmesg zeigte
+weiterhin `unknown ioctl cmd=0xc010480e` (GET_CHARACTERISTICS) und
+`unknown ioctl cmd=0xc0204809` (SYNCPT_WAITMEX) → CUDA Error 999 blieb.
+
+**Root Cause:** `nvidia-tegra-nvgpu/pkg.yaml` lädt den Shim-Quellcode via URL mit
+gepinntem Commit-Hash. Die neuen Ioctls wurden in commit `b5678b2` implementiert,
+aber `pkg.yaml` verwies noch auf den alten Commit `db78346` (nur pr_info-Tracing,
+keine echten ioctl-Handler). bldr hat also den alten Code gebaut.
+
+**Fix (5.10.4):**
+- `pkg.yaml` URL-Pin: `db78346` → `b5678b2932359cde001ccbc084f3597ddc5b463b`
+- sha256/sha512 aktualisiert
+- NVGPU_VERSION: `5.10.3` → `5.10.4`
+
+**Regel:** Bei jeder Änderung an `nvhost-ctrl-shim/nvhost_ctrl_shim.c` IMMER sofort
+den Pin in `nvidia-tegra-nvgpu/pkg.yaml` (url + sha256 + sha512) mitpflegen!
+
+---
+
+## Ergebnis: GPU-Inferenz erfolgreich (2026-04-09)
+
+**nvgpu 5.10.4 + nvhost-ctrl-shim mit SYNCPT_WAITMEX + GET_CHARACTERISTICS:**
+
+| Metrik | Vorher (CPU) | Nachher (GPU) |
+|--------|-------------|---------------|
+| eval rate (qwen2.5:0.5b) | ~7 tok/s | **~16 tok/s** |
+| prompt eval rate | ~50 tok/s | **1789 tok/s** |
+| CUDA Error 999 | ja | **nein** |
+
+dmesg bestätigt: `SYNCPT_WAITMEX done` — Hardware-Syncpoint-Interrupts aktiv.
