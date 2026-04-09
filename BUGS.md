@@ -662,7 +662,31 @@ if (host->syncpt_base == 0) {
 This matches what newer OE4T commits (e.g. `6e071c0`) already do. The fix is applied via
 `sed` in the pkg.yaml prepare step, guarded to be idempotent.
 
-nvgpu 5.9.2 (NVHOST=n, ~7 tok/s) remains the fallback if 5.9.5 NVHOST=y still fails.
+### nvgpu 5.9.5 — FAILED: L4T nvhost subsystem missing (fundamental blocker)
+
+**Tested result:** `kref_init` was already present in `ccf7646c` — patch skipped (idempotent).
+Still 1 `Can't initialize nvrm channel` + CUDA error 999.
+
+**True root cause (definitively found):** NVHOST=y requires the **L4T nvhost subsystem** — a
+separate NVIDIA kernel module that provides:
+- `/dev/nvhost-gpu` — legacy GPU channel device used by `libnvrm_host1x.so`
+- `NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT` — extracts a Linux sync_file from a syncpoint
+- `NVHOST_IOCTL_CTRL_SYNCPT_WAITEX` — user-space syncpoint blocking wait
+
+The CUDA runtime (`libnvrm_host1x.so`) calls these ioctls when `cudaStreamSynchronize`
+uses syncpt-based channels (NVHOST=y mode). Without them, the syncpt wait never completes.
+
+**Why they're missing:** The OE4T `linux-nv-oot` only contains the upstream-compatible
+`host1x` driver (syncpt kernel API) and video capture drivers (nvdla, vi, isp, etc.).
+The full L4T nvhost framework (`drivers/video/tegra/host/`) with the `/dev/nvhost-ctrl`
+ioctl implementation is in NVIDIA's proprietary out-of-tree kernel package — not available
+in the OE4T community fork.
+
+**Conclusion: NVHOST=y is not achievable with OE4T + JetPack 6 CUDA runtime.** The L4T
+nvhost kernel module would need to be ported/compiled separately (very complex, not pursued).
+
+**Stable path: nvgpu 5.9.2 (NVHOST=n, ~7 tok/s).** All 5.9.3–5.9.5 NVHOST=y attempts are
+archived here as documentation for future reference.
 
 ### nvgpu Version History
 
@@ -677,4 +701,4 @@ nvgpu 5.9.2 (NVHOST=n, ~7 tok/s) remains the fallback if 5.9.5 NVHOST=y still fa
 | 5.9.2 | n | NVHOST=n + UBSAN fix (stable fallback) | ✅ | ~7 tok/s |
 | 5.9.3 | y | OOT host1x + id=0 skip awk (flags on 2 lines → awk never matched) | ❌ error 999 | — |
 | 5.9.4 | y | Fix awk: match `return host1x_syncpt_id(sp)` directly → 2→1 nvrm errors | ❌ error 999 | — |
-| **5.9.5** | **y** | **Fix host1x syncpt.c: `kref_init(&syncpt[0].ref)` → id=0 permanently reserved** | **⏳ testing** | **TBD** |
+| 5.9.5 | y | Fix host1x syncpt.c kref_init (already present) — L4T nvhost blocker confirmed | ❌ error 999 | — |
