@@ -44,7 +44,7 @@ jobs:
           source scripts/common.sh
           NVGPU_IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-tegra-nvgpu:${NVGPU_VERSION}-${KERNEL_VERSION}-talos"
           KM_IMAGE="ghcr.io/${{ github.repository_owner }}/kernel-modules-clang:${KERNEL_MODULES_VERSION}-${KERNEL_VERSION}-talos"
-          INSTALLER_IMAGE="ghcr.io/${{ github.repository_owner }}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}"
+          INSTALLER_IMAGE="ghcr.io/${{ github.repository_owner }}/custom-installer:${TALOS_VERSION}-${KERNEL_VERSION}-nvgpu${NVGPU_VERSION}"
           FW_IMAGE="ghcr.io/${{ github.repository_owner }}/nvidia-firmware-ext:${FIRMWARE_EXT_TAG}"
           NVGPU_EXISTS=false
           KM_EXISTS=false
