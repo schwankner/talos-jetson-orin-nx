@@ -107,17 +107,23 @@ static struct host1x *get_host1x(void)
 	void *drvdata;
 
 	np = of_find_matching_node(NULL, host1x_of_match);
-	if (!np)
+	if (!np) {
+		pr_err_ratelimited("nvhost-ctrl-shim: no host1x OF node found\n");
 		return ERR_PTR(-ENODEV);
+	}
 
 	pdev = of_find_device_by_node(np);
 	of_node_put(np);
-	if (!pdev)
+	if (!pdev) {
+		pr_err_ratelimited("nvhost-ctrl-shim: no host1x platform_device\n");
 		return ERR_PTR(-EAGAIN);
+	}
 
 	drvdata = platform_get_drvdata(pdev);
-	if (!drvdata)
+	if (!drvdata) {
+		pr_err_ratelimited("nvhost-ctrl-shim: host1x drvdata is NULL\n");
 		return ERR_PTR(-EAGAIN);
+	}
 
 	return drvdata;
 }
@@ -128,9 +134,13 @@ static int nvhost_ctrl_open(struct inode *inode, struct file *file)
 {
 	struct host1x *host1x = get_host1x();
 
-	if (IS_ERR(host1x))
+	if (IS_ERR(host1x)) {
+		pr_err("nvhost-ctrl-shim: open failed, get_host1x=%ld\n",
+		       PTR_ERR(host1x));
 		return PTR_ERR(host1x);
+	}
 
+	pr_info("nvhost-ctrl-shim: opened (pid %d)\n", current->pid);
 	file->private_data = host1x;
 	return 0;
 }
@@ -147,8 +157,11 @@ static int ioctl_syncpt_read(struct host1x *host1x, void __user *data,
 		return -EFAULT;
 
 	sp = host1x_syncpt_get_by_id_noref(host1x, args.id);
-	if (!sp)
+	if (!sp) {
+		pr_err_ratelimited("nvhost-ctrl-shim: SYNCPT_READ%s: id=%u not found\n",
+				   read_max ? "_MAX" : "", args.id);
 		return -EINVAL;
+	}
 
 	args.value = read_max ? host1x_syncpt_read_max(sp)
 			      : host1x_syncpt_read(sp);
@@ -165,8 +178,11 @@ static int make_fence_fd(struct host1x_syncpt *sp, u32 thresh)
 	int fd;
 
 	f = host1x_fence_create(sp, thresh, true);
-	if (IS_ERR(f))
+	if (IS_ERR(f)) {
+		pr_err_ratelimited("nvhost-ctrl-shim: host1x_fence_create thresh=%u err=%ld\n",
+				   thresh, PTR_ERR(f));
 		return PTR_ERR(f);
+	}
 
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0) {
@@ -263,6 +279,8 @@ static int ioctl_sync_fence_create(struct host1x *host1x, void __user *data)
 	if (copy_from_user(&args, data, sizeof(args)))
 		return -EFAULT;
 
+	pr_info("nvhost-ctrl-shim: SYNC_FENCE_CREATE num_pts=%u\n", args.num_pts);
+
 	if (args.num_pts == 0 || args.num_pts > 512)
 		return -EINVAL;
 
@@ -271,17 +289,25 @@ static int ioctl_sync_fence_create(struct host1x *host1x, void __user *data)
 	if (args.num_pts == 1) {
 		if (copy_from_user(&pt, pts_user, sizeof(pt)))
 			return -EFAULT;
+		pr_info("nvhost-ctrl-shim: SYNC_FENCE_CREATE id=%u thresh=%u\n",
+			pt.id, pt.thresh);
 		sp = host1x_syncpt_get_by_id_noref(host1x, pt.id);
-		if (!sp)
+		if (!sp) {
+			pr_err("nvhost-ctrl-shim: SYNC_FENCE_CREATE id=%u not found\n",
+			       pt.id);
 			return -EINVAL;
+		}
 		fd = make_fence_fd(sp, pt.thresh);
 	} else {
 		fd = make_array_fence_fd(host1x, pts_user, args.num_pts);
 	}
 
-	if (fd < 0)
+	if (fd < 0) {
+		pr_err("nvhost-ctrl-shim: SYNC_FENCE_CREATE failed: %d\n", fd);
 		return fd;
+	}
 
+	pr_info("nvhost-ctrl-shim: SYNC_FENCE_CREATE → fd=%d\n", fd);
 	args.fence_fd = fd;
 	if (copy_to_user(data, &args, sizeof(args))) {
 		close_fd(fd);
@@ -359,7 +385,8 @@ static long nvhost_ctrl_ioctl(struct file *file, unsigned int cmd,
 
 	switch (cmd) {
 	case NVHOST_IOCTL_CTRL_GET_VERSION: {
-		struct nvhost_get_param_args v = { .value = 0 };
+		struct nvhost_get_param_args v = { .value = 1 };
+		pr_info("nvhost-ctrl-shim: GET_VERSION → 1\n");
 		return copy_to_user(data, &v, sizeof(v)) ? -EFAULT : 0;
 	}
 	case NVHOST_IOCTL_CTRL_SYNCPT_READ:
@@ -371,6 +398,7 @@ static long nvhost_ctrl_ioctl(struct file *file, unsigned int cmd,
 	case NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT:
 		return ioctl_sync_file_extract(host1x, data);
 	default:
+		pr_warn_ratelimited("nvhost-ctrl-shim: unknown ioctl cmd=0x%08x\n", cmd);
 		return -ENOTTY;
 	}
 }
