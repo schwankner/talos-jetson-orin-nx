@@ -315,29 +315,7 @@ steps:
         # again → id=1 (or first free non-zero id). The Tegra234 syncpoint shim covers all
         # 1024 syncpoints so any non-zero id is GPU-signable.
         NVHOST_H1X=/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/nvhost_host1x.c
-        awk '
-/HOST1X_SYNCPT_CLIENT_MANAGED \| HOST1X_SYNCPT_GPU,/ { in_alloc=1 }
-in_alloc && /return host1x_syncpt_id\(sp\);/ {
-    print "\t/* nvgpu 5.9.3: skip syncpt id=0 (NVGPU_ERRATA_SYNCPT_INVALID_ID_0 on GA10b)."
-    print "\t * host1x returns id=0 when GPU pool absent in DT and syncpt_base=0."
-    print "\t * Hold id=0 to advance allocator, then re-allocate to get a valid non-zero id."
-    print "\t * Tegra234 syncpt shim maps all 1024 ids so any id>=1 is GPU-signable. */"
-    print "\tif (host1x_syncpt_id(sp) == 0U) {"
-    print "\t\tstruct host1x_syncpt *sp_skip = sp;"
-    print "\t\tsp = host1x_syncpt_alloc(host1x,"
-    print "\t\t\t\tHOST1X_SYNCPT_CLIENT_MANAGED | HOST1X_SYNCPT_GPU,"
-    print "\t\t\t\tsyncpt_name);"
-    print "\t\thost1x_syncpt_put(sp_skip);"
-    print "\t\tif (!sp)"
-    print "\t\t\treturn 0;"
-    print "\t}"
-    print ""
-    print "\treturn host1x_syncpt_id(sp);"
-    in_alloc=0
-    next
-}
-{ print }
-' "$NVHOST_H1X" > "$NVHOST_H1X.tmp" && mv "$NVHOST_H1X.tmp" "$NVHOST_H1X"
+        awk '/HOST1X_SYNCPT_CLIENT_MANAGED \| HOST1X_SYNCPT_GPU,/ { in_alloc=1 } in_alloc && /return host1x_syncpt_id\(sp\);/ { print "\t/* nvgpu 5.9.3: GA10b ERRATA_SYNCPT_INVALID_ID_0: skip syncpt id=0."; print "\t * host1x returns id=0 when GPU pool absent in DT (syncpt_base=0 first free)."; print "\t * Hold id=0, re-allocate to advance past reserved slot to id>=1."; print "\t * Tegra234 syncpt shim covers all 1024 ids so any id>=1 is GPU-signable. */"; print "\tif (host1x_syncpt_id(sp) == 0U) {"; print "\t\tstruct host1x_syncpt *sp_skip = sp;"; print "\t\tsp = host1x_syncpt_alloc(host1x,"; print "\t\t\t\tHOST1X_SYNCPT_CLIENT_MANAGED | HOST1X_SYNCPT_GPU,"; print "\t\t\t\tsyncpt_name);"; print "\t\thost1x_syncpt_put(sp_skip);"; print "\t\tif (!sp)"; print "\t\t\treturn 0;"; print "\t}"; print ""; print "\treturn host1x_syncpt_id(sp);"; in_alloc=0; next } { print }' "$NVHOST_H1X" > "$NVHOST_H1X.tmp" && mv "$NVHOST_H1X.tmp" "$NVHOST_H1X"
         echo "Patched nvhost_host1x.c: added syncpt id=0 skip (GA10b ERRATA_SYNCPT_INVALID_ID_0 workaround)"
         # netlist.c: fix UBSAN array-index-out-of-bounds false positive.
         # struct netlist_image declares regions[1] (fixed size) but the loop iterates
