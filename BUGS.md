@@ -592,20 +592,44 @@ Evidence:
 which would eliminate the per-token CPU polling. Both attempts ended with CUDA error 999 —
 documented in full in **[Bug 14](#bug-14--cuda-error-999-persists-with-nvhost=y-nvgpu-590--591)**.
 
-### Current Status (nvgpu 5.9.3 — in progress)
+### nvgpu 5.9.3 — FAILED: Awk Pattern Never Matched (Source Has Flags on Two Lines)
 
-nvgpu 5.9.3 attempts to fix the root cause: NVHOST=y + OOT host1x + patch to skip syncpt id=0.
+nvgpu 5.9.3 booted successfully with NVHOST=y and `nvgpu_nvhost_syncpt_init` logged correctly.
+All modules loaded: `host1x (O)`, `host1x_fence`, `nvmap`, `mc_utils`, `nvgpu`. But Ollama
+still crashed with `CUDA error: unknown error` in `cudaStreamSynchronize` — same error 999.
 
-**Root cause of 5.9.0 error 999 (now understood):**
-`host1x_syncpt_alloc(..., HOST1X_SYNCPT_GPU, ...)` allocates from the first free syncpoint
-starting at `syncpt_base=0` when no "gpu" pool is defined in the device tree → returns id=0.
-nvgpu rejects id=0 due to `NVGPU_ERRATA_SYNCPT_INVALID_ID_0` (GA10b) → channel sync fails.
+**Root cause:** The `pkg.yaml` awk patch that was supposed to skip syncpt id=0 in
+`nvhost_host1x.c` (`nvgpu_nvhost_get_syncpt_client_managed`) **never fired**.
 
-**5.9.3 fix:** allocate id=0 temporarily to advance the allocator past the reserved slot,
-then allocate again → id≥1. The Tegra234 syncpoint shim covers all 1024 syncpoints so any
-non-zero id is GPU-signable via hardware interrupt (no CPU polling).
+The awk trigger pattern was:
+```
+/HOST1X_SYNCPT_CLIENT_MANAGED \| HOST1X_SYNCPT_GPU,/
+```
 
-nvgpu 5.9.2 (NVHOST=n) remains the fallback if 5.9.3 NVHOST=y still fails.
+But in the actual OE4T source (d530a48), the call spans **two lines**:
+```c
+sp = host1x_syncpt_alloc(host1x, HOST1X_SYNCPT_CLIENT_MANAGED |
+                 HOST1X_SYNCPT_GPU, syncpt_name);
+```
+
+Awk processes one line at a time — the pattern required both flags on the same line → never
+matched → `in_alloc` was never set → the `return host1x_syncpt_id(sp);` replacement never
+happened → syncpt id=0 was returned to nvgpu → `NVGPU_ERRATA_SYNCPT_INVALID_ID_0` fired →
+error 999.
+
+### Current Fix (nvgpu 5.9.4)
+
+`host1x_syncpt_id(sp)` appears exactly **once** in `nvhost_host1x.c`. Simplified awk to
+match only on `return host1x_syncpt_id\(sp\);` — no two-condition state machine needed:
+
+```bash
+awk '/return host1x_syncpt_id\(sp\);/ { ...insert id=0 skip fix...; next } { print }'
+```
+
+This is robust: the pattern matches regardless of how the `host1x_syncpt_alloc` call above
+it is formatted across lines.
+
+nvgpu 5.9.2 (NVHOST=n, ~7 tok/s) remains the fallback if 5.9.4 NVHOST=y still fails.
 
 ### nvgpu Version History
 
@@ -618,4 +642,5 @@ nvgpu 5.9.2 (NVHOST=n) remains the fallback if 5.9.3 NVHOST=y still fails.
 | 5.9.0 | y | OOT host1x built — syncpt id=0 returned → ERRATA → error 999 | ❌ error 999 | — |
 | 5.9.1 | y | HOST1X_SYNCPT_GPU flag removed → CLIENT_MANAGED not GPU-signable | ❌ error 999 | — |
 | 5.9.2 | n | NVHOST=n + UBSAN fix (stable fallback) | ✅ | ~7 tok/s |
-| **5.9.3** | **y** | **OOT host1x + nvhost_host1x.c id=0 skip patch** | **⏳ testing** | **TBD** |
+| 5.9.3 | y | OOT host1x + id=0 skip awk (flags on 2 lines → awk never matched) | ❌ error 999 | — |
+| **5.9.4** | **y** | **Fix awk: match `return host1x_syncpt_id(sp)` directly** | **⏳ testing** | **TBD** |
