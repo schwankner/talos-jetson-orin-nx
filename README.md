@@ -3,7 +3,7 @@
 [![Talos](https://img.shields.io/badge/Talos-v1.12.6-blue)](https://github.com/siderolabs/talos/releases/tag/v1.12.6)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35.0-blue)](https://kubernetes.io/)
 [![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
-[![nvgpu](https://img.shields.io/badge/nvgpu-5.9.2-green)](https://github.com/OE4T/linux-nvgpu)
+[![nvgpu](https://img.shields.io/badge/nvgpu-5.9.5-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 [![Build](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml)
 
@@ -120,10 +120,10 @@ download the `.raw` file manually.
 
 ```bash
 # macOS (replace rdiskN with your USB drive — check: diskutil list)
-sudo dd if=talos-usb-nvgpu5.9.2.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=talos-usb-nvgpu5.9.5.raw of=/dev/rdiskN bs=4m && sync
 
 # Linux (replace sdX with your USB drive — check: lsblk)
-sudo dd if=talos-usb-nvgpu5.9.2.raw of=/dev/sdX bs=4M status=progress && sync
+sudo dd if=talos-usb-nvgpu5.9.5.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
 > **Tip**: On macOS use `diskutil unmountDisk /dev/diskN` before flashing.
@@ -186,7 +186,7 @@ All scripts read from `scripts/common.sh`. Override per-run:
 | `REGISTRY_DOCKER` | `host.docker.internal:5001` | Registry as seen from inside Docker |
 | `TALOS_VERSION` | `v1.12.6` | Talos release |
 | `KERNEL_VERSION` | `6.18.18` | Kernel version |
-| `NVGPU_VERSION` | `5.9.2` | nvgpu extension version |
+| `NVGPU_VERSION` | `5.9.5` | nvgpu extension version |
 
 ---
 
@@ -206,10 +206,10 @@ make build-extensions
 make usb
 
 # 4. Flash to USB drive (macOS — replace rdiskN)
-sudo dd if=dist/talos-usb-nvgpu5.9.2.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=dist/talos-usb-nvgpu5.9.5.raw of=/dev/rdiskN bs=4m && sync
 
 # Linux:
-# sudo dd if=dist/talos-usb-nvgpu5.9.2.raw of=/dev/sdX bs=4M status=progress && sync
+# sudo dd if=dist/talos-usb-nvgpu5.9.5.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
 ---
@@ -238,7 +238,7 @@ Both jobs run on **native ARM64** (`ubuntu-24.04-arm`) — no QEMU, no cross-com
 ### Trigger a release
 
 ```bash
-git tag v1.12.6-nvgpu5.9.2
+git tag v1.12.6-nvgpu5.9.5
 git push --tags
 # → pipeline builds the image and creates a release with the .raw attached
 ```
@@ -329,7 +329,7 @@ patches to compile these against a standard upstream kernel.
 | Image | Tag | What's inside |
 |---|---|---|
 | `custom-installer` | `v1.12.6-6.18.18` | Official Talos installer + custom Clang vmlinuz |
-| `nvidia-tegra-nvgpu` | `5.9.2-6.18.18-talos` | `nvgpu.ko` (NVHOST=n) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
+| `nvidia-tegra-nvgpu` | `5.9.5-6.18.18-talos` | `nvgpu.ko` (NVHOST=n) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
 | `kernel-modules-clang` | `1.1.0-6.18.18-talos` | Full Clang-compiled kernel module tree |
 | `nvidia-firmware-ext` | `v5` | JetPack r36.5 firmware at `/usr/lib/firmware/ga10b/` incl. `pmu_pkc_prod_sig.bin` |
 
@@ -369,7 +369,7 @@ distribution) is documented in **[BUGS.md](BUGS.md)**.
 | OE4T linux-nvgpu | `d530a48` | patches-r36.5 — the GA10B GPU driver |
 | OE4T linux-nv-oot | `ccf7646` | NVIDIA OOT framework (nvmap, conftest, devfreq) |
 | OE4T linux-hwpm | `4d8a699` | Hardware Performance Monitor |
-| `nvidia-tegra-nvgpu` ext | **5.9.2** | `NVHOST=n` (GPU semaphore sync, no host1x) + netlist UBSAN fix; stable CUDA |
+| `nvidia-tegra-nvgpu` ext | **5.9.5** | `NVHOST=n` (GPU semaphore sync, no host1x) + netlist UBSAN fix; stable CUDA |
 | `kernel-modules-clang` ext | **1.3.0** | Full Clang-compiled kernel module tree, signed with `talos_signing_key.pem` |
 | `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added; sourced from L4T r36.5 apt (`t234` repo) |
 
@@ -498,7 +498,7 @@ Notable items relevant to day-to-day use:
 |---|-------|--------|--------|
 | [Bug 6](BUGS.md#bug-6--cuda-error-999-cudastreamsynchronize--nvhost-syncpoint) | CUDA error 999 (`cudaStreamSynchronize`) | GPU compute fails | ✅ Fixed — `NVHOST=n` |
 | [Bug 14](BUGS.md#bug-14--cuda-error-999-persists-with-nvhosty-nvgpu-590--591) | CUDA error 999 with NVHOST=y (5.9.0/5.9.1) | GPU pool not signable | ✅ Diagnosed — NVHOST=n stable |
-| [Bug 15](BUGS.md#bug-15--gpu-decode-speed-7-toks-cpu-polling-overhead-with-nvhostn) | GPU decode ~7 tok/s (expected 20–30) | Slow inference | ⚠️ Known — CPU semaphore polling |
+| [Bug 15](BUGS.md#bug-15--gpu-decode-speed-7-toks-cpu-polling-overhead-with-nvhostn) | GPU decode ~7 tok/s (expected 20–30) | Slow inference | ❌ NVHOST=y blocked — L4T nvhost missing; NVHOST=n stable |
 | [Bug 9](BUGS.md#bug-9--ubsan-array-index-out-of-bounds-in-netlistc-non-fatal) | UBSAN `netlist.c:617` at every boot | Log noise | ✅ Silenced (flexible array) |
 
 ---
