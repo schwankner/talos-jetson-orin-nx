@@ -28,7 +28,7 @@ LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
 LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.9.4}"          # .../ 5.8.0 (NVHOST=n stable) / 5.9.0 (NVHOST=y: OOT host1x installed, syncpt id=0 → ERRATA → error 999) / 5.9.1 (HOST1X_SYNCPT_GPU removed → CLIENT_MANAGED not GPU-signable → error 999) / 5.9.2 (NVHOST=n: GPU semaphore sync, stable) / 5.9.3 (NVHOST=y: OOT host1x + nvhost_host1x.c id=0 skip patch → awk pattern matched flags on two lines → never applied → error 999) / 5.9.4 (fix awk: match return host1x_syncpt_id(sp) directly → patch now applied → id=0 skipped → error 999 fixed)
+NVGPU_VERSION="${NVGPU_VERSION:-5.9.5}"          # .../ 5.8.0 (NVHOST=n stable) / 5.9.0 (NVHOST=y: OOT host1x installed, syncpt id=0 → ERRATA → error 999) / 5.9.1 (HOST1X_SYNCPT_GPU removed → CLIENT_MANAGED not GPU-signable → error 999) / 5.9.2 (NVHOST=n: GPU semaphore sync, stable) / 5.9.3 (NVHOST=y: OOT host1x + nvhost_host1x.c id=0 skip patch → awk pattern matched flags on two lines → never applied → error 999) / 5.9.4 (fix awk: match return host1x_syncpt_id(sp) directly → patch applied, 2→1 nvrm channel errors) / 5.9.5 (fix host1x syncpt.c: kref_init(&syncpt[0].ref) → id=0 permanently reserved → never allocated → all channels succeed)
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 

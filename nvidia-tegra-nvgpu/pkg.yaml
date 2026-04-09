@@ -96,6 +96,24 @@ steps:
           | xargs -r sed -i "s|#if defined(NV_BUS_TYPE_STRUCT_UEVENT_HAS_CONST_DEV_ARG)|#if 1 /* force: kernel 6.x+ */|g"
         echo "Patched OOT host1x: forced conftest macro code paths for kernel 6.18"
 
+        # host1x syncpt.c: permanently reserve syncpt id=0 so host1x_syncpt_alloc never returns it.
+        # GA10b has NVGPU_ERRATA_SYNCPT_INVALID_ID_0: nvgpu rejects id=0 → channel init fails → error 999.
+        # OOT host1x (ccf7646c) marks syncpt[0] with name="reserved" but does NOT set kref=1, so the
+        # alloc loop (which skips syncpts where kref_read(&sp->ref) != 0) still returns id=0.
+        # Fix: add kref_init(&syncpt[0].ref) before the name assignment, matching what newer OE4T
+        # commits already do (e.g. 6e071c0). Guard is idempotent — safe even if already present.
+        SYNCPT_C=${NVIDIA_OOT}/drivers/gpu/host1x/syncpt.c
+        if grep -q 'syncpt\[0\]\.name = kstrdup' "${SYNCPT_C}" 2>/dev/null; then
+          if ! grep -q 'kref_init.*syncpt\[0\]' "${SYNCPT_C}" 2>/dev/null; then
+            sed -i 's/\(syncpt\[0\]\.name = kstrdup("reserved", GFP_KERNEL);\)/kref_init(\&syncpt[0].ref);\n\t\t\1/' "${SYNCPT_C}"
+            echo "Patched host1x syncpt.c: added kref_init(&syncpt[0].ref) — id=0 permanently reserved"
+          else
+            echo "host1x syncpt.c: kref_init(&syncpt[0].ref) already present — no patch needed"
+          fi
+        else
+          echo "WARNING: host1x syncpt.c pattern not found — syncpt id=0 reservation patch skipped"
+        fi
+
         # host1x-fence: remove -Werror, add conftest + nvidia-oot includes
         # host1x-next.h lives in drivers/gpu/host1x/include/linux/ within nvidia-oot
         sed -i 's|ccflags-y += -Werror||g' \
