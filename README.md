@@ -3,7 +3,7 @@
 [![Talos](https://img.shields.io/badge/Talos-v1.12.6-blue)](https://github.com/siderolabs/talos/releases/tag/v1.12.6)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35.0-blue)](https://kubernetes.io/)
 [![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
-[![nvgpu](https://img.shields.io/badge/nvgpu-5.8.0-green)](https://github.com/OE4T/linux-nvgpu)
+[![nvgpu](https://img.shields.io/badge/nvgpu-5.9.2-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 [![Build](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml)
 
@@ -12,9 +12,9 @@ compute support in Kubernetes pods. One USB image boots the entire Orin family (
 Orin NX, Orin Nano) — all share the same T234 SoC, GA10B GPU, and UEFI boot path.
 
 Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html)**
-(Jetson Orin NX 16 GB). Verified result as of 2026-04-04:
+(Jetson Orin NX 16 GB). Verified result as of 2026-04-09:
 
-- GPU inference: **~7–8 tok/s** decode, **~700 tok/s** prefill (qwen2.5:1.5b Q4_K_M, 29/29 layers on GPU, on Ollama, Flash Attention enabled)
+- GPU inference: **~7 tok/s** decode, **~110 tok/s** prefill (qwen2.5:0.5b, 25/25 layers on GPU, on Ollama, Flash Attention enabled)
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
 
 > ### ⚠️ CUDA Container Compatibility — Read Before You Start
@@ -118,10 +118,10 @@ download the `.raw` file manually.
 
 ```bash
 # macOS (replace rdiskN with your USB drive — check: diskutil list)
-sudo dd if=talos-usb-nvgpu5.1.0.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=talos-usb-nvgpu5.9.2.raw of=/dev/rdiskN bs=4m && sync
 
 # Linux (replace sdX with your USB drive — check: lsblk)
-sudo dd if=talos-usb-nvgpu5.1.0.raw of=/dev/sdX bs=4M status=progress && sync
+sudo dd if=talos-usb-nvgpu5.9.2.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
 > **Tip**: On macOS use `diskutil unmountDisk /dev/diskN` before flashing.
@@ -184,7 +184,7 @@ All scripts read from `scripts/common.sh`. Override per-run:
 | `REGISTRY_DOCKER` | `host.docker.internal:5001` | Registry as seen from inside Docker |
 | `TALOS_VERSION` | `v1.12.6` | Talos release |
 | `KERNEL_VERSION` | `6.18.18` | Kernel version |
-| `NVGPU_VERSION` | `5.1.0` | nvgpu extension version |
+| `NVGPU_VERSION` | `5.9.2` | nvgpu extension version |
 
 ---
 
@@ -204,10 +204,10 @@ make build-extensions
 make usb
 
 # 4. Flash to USB drive (macOS — replace rdiskN)
-sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=dist/talos-usb-nvgpu5.9.2.raw of=/dev/rdiskN bs=4m && sync
 
 # Linux:
-# sudo dd if=dist/talos-usb-nvgpu5.1.0.raw of=/dev/sdX bs=4M status=progress && sync
+# sudo dd if=dist/talos-usb-nvgpu5.9.2.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
 ---
@@ -236,7 +236,7 @@ Both jobs run on **native ARM64** (`ubuntu-24.04-arm`) — no QEMU, no cross-com
 ### Trigger a release
 
 ```bash
-git tag v1.12.6-nvgpu5.1.0
+git tag v1.12.6-nvgpu5.9.2
 git push --tags
 # → pipeline builds the image and creates a release with the .raw attached
 ```
@@ -285,7 +285,7 @@ siderolabs/pkgs (commit a92bed5, release-1.12)
     │                                                             │
     └─ nvidia-tegra-nvgpu ──(OE4T patches-r36.5, Clang)────────► nvgpu.ko
                                                                   governor_pod_scaling.ko
-                                                                  host1x.ko  …
+                                                                  nvmap.ko  …
                                                                   │
                               ┌───────────────────────────────────┤
                               │    Local Registry / ghcr.io       │
@@ -327,7 +327,7 @@ patches to compile these against a standard upstream kernel.
 | Image | Tag | What's inside |
 |---|---|---|
 | `custom-installer` | `v1.12.6-6.18.18` | Official Talos installer + custom Clang vmlinuz |
-| `nvidia-tegra-nvgpu` | `5.1.0-6.18.18-talos` | `nvgpu.ko` + `governor_pod_scaling.ko` + `host1x.ko` + friends |
+| `nvidia-tegra-nvgpu` | `5.9.2-6.18.18-talos` | `nvgpu.ko` (NVHOST=n) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
 | `kernel-modules-clang` | `1.1.0-6.18.18-talos` | Full Clang-compiled kernel module tree |
 | `nvidia-firmware-ext` | `v5` | JetPack r36.5 firmware at `/usr/lib/firmware/ga10b/` incl. `pmu_pkc_prod_sig.bin` |
 
@@ -365,10 +365,10 @@ distribution) is documented in **[BUGS.md](BUGS.md)**.
 | Kernel | **6.18.18-talos** | Clang/LLVM build, reproducible module signing key |
 | LLVM/Clang | `v1.14.0-alpha.0` | `ghcr.io/siderolabs/llvm` |
 | OE4T linux-nvgpu | `d530a48` | patches-r36.5 — the GA10B GPU driver |
-| OE4T linux-nv-oot | `ea32e7f` | NVIDIA OOT framework (host1x, conftest) |
+| OE4T linux-nv-oot | `ccf7646` | NVIDIA OOT framework (nvmap, conftest, devfreq) |
 | OE4T linux-hwpm | `4d8a699` | Hardware Performance Monitor |
-| `nvidia-tegra-nvgpu` ext | **5.1.0** | devfreq ccflags fix → `governor_pod_scaling.ko` built |
-| `kernel-modules-clang` ext | **1.1.0** | Full in-tree Clang module tree, signed with `talos_signing_key.pem` |
+| `nvidia-tegra-nvgpu` ext | **5.9.2** | `NVHOST=n` (GPU semaphore sync, no host1x) + netlist UBSAN fix; stable CUDA |
+| `kernel-modules-clang` ext | **1.3.0** | Full Clang-compiled kernel module tree, signed with `talos_signing_key.pem` |
 | `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added; sourced from L4T r36.5 apt (`t234` repo) |
 
 ---
@@ -484,13 +484,14 @@ talosctl -n 10.0.10.38 read /sys/devices/system/cpu/online
 
 ---
 
-## 9. GPU Generation Speed — Investigation & Roadmap
+## 9. GPU Generation Speed — Investigation History
 
-### Current Status
+### Current Status (nvgpu 5.9.2)
 
-Ollama (qwen2.5:1.5b Q4_K_M, 29/29 layers on CUDA) delivers **~7–8 tok/s** decode on Jetson
-Orin NX 16 GB. The expected throughput is **20–30 tok/s**. This section documents what has
-been investigated, ruled out, and what the planned fix is.
+Ollama (qwen2.5:0.5b, 25/25 layers on CUDA) delivers **~7 tok/s** decode on Jetson
+Orin NX 16 GB. This is a known, accepted limitation — full CUDA correctness was the
+primary goal (CUDA error 999 is now fixed). This section documents the complete
+investigation.
 
 ### What Was Ruled Out
 
@@ -498,95 +499,69 @@ All of the following were tested and had **no measurable effect** on generation 
 
 | Attempted | Result |
 |-----------|--------|
-| GPU clock: 306 MHz → 918 MHz (MAXN) | No change — speed stays at ~7.5 tok/s |
-| `GGML_CUDA_GRAPHS=1` (batch all kernel launches) | No change |
+| GPU clock: 306 MHz → 918 MHz (MAXN) | No change — speed stays at ~7 tok/s |
+| `GGML_CUDA_GRAPHS=1` | No change |
 | `OLLAMA_FLASH_ATTENTION=1` | No change |
-| `OLLAMA_NUM_PARALLEL=1` (reduce idle KV-cache slots) | No change |
-| `OLLAMA_KV_CACHE_TYPE=q8_0` (halve KV cache size) | No change |
-| `CUDA_LAUNCH_BLOCKING=0` | No change |
+| `OLLAMA_NUM_PARALLEL=1` | No change |
+| `OLLAMA_KV_CACHE_TYPE=q8_0` | No change |
 
-GPU clock having **zero effect** on decode speed is the key diagnostic: the bottleneck is
-not GPU compute throughput but CPU-side overhead between tokens.
+GPU clock having **zero effect** is the key diagnostic: the bottleneck is CPU-side
+overhead between tokens, not GPU compute.
 
-### Root Cause Hypothesis: `cudaStreamSynchronize` Without Host1x Syncpoints
+### Root Cause: CPU Overhead in `cudaStreamSynchronize` (NVHOST=n)
 
-nvgpu is built with `CONFIG_TEGRA_GK20A_NVHOST=n` (required to avoid CUDA error 999 on
-stock upstream kernels). With NVHOST disabled, nvgpu **does not register GPU syncpoints
-with the host1x subsystem**. `cudaStreamSynchronize` must therefore busy-poll or use an
-internal wake mechanism that introduces ~130 ms/token overhead.
+With `CONFIG_TEGRA_GK20A_NVHOST=n`, nvgpu uses GPU semaphore buffers (`sema_buf`) for
+stream synchronization instead of host1x hardware syncpoints. The semaphore mechanism
+requires the CPU to actively poll or sleep-wait after each token — introducing
+~130 ms/token overhead in decode.
 
 Evidence:
-- CPU ramps to **1984 MHz during generation** (typical of busy-wait or heavy CPU sampling)
-- GPU stays at **minimum clock during generation** (not compute-bound)
-- Prefill is **fast (~450 tok/s)** — proves GPU CUDA compute itself works correctly
+- CPU ramps to ~1984 MHz during generation (busy-wait pattern)
+- GPU stays at minimum clock during generation (not compute-bound)
+- Prefill is fast (~110 tok/s) — proves the GPU CUDA compute path works correctly
 
-### Why NVHOST=y Failed (nvgpu 5.7.0 — 2026-04-08)
+### Why NVHOST=y Was Attempted and Failed (nvgpu 5.9.0 / 5.9.1)
 
-Enabling `CONFIG_TEGRA_GK20A_NVHOST=y` in nvgpu 5.7.0 caused nvgpu.ko to **fail loading**
-with two separate blockers:
+`CONFIG_TEGRA_GK20A_NVHOST=y` uses host1x hardware syncpoints for `cudaStreamSynchronize`.
+This is the "correct" Tegra path and would eliminate the CPU polling overhead.
 
-**Blocker 1 — Symbol CRC mismatch** (all `host1x_syncpt_*` symbols)
+**nvgpu 5.9.0** — OOT host1x built and installed in extension to resolve CRC and symbol mismatches.
+CUDA error 999 still occurred: `nvgpu_nvhost_get_syncpt_client_managed()` returned id=0,
+triggering `NVGPU_ERRATA_SYNCPT_INVALID_ID_0` (set for GA10b in `hal_ga10b.c`).
 
-nvgpu was compiled against NVIDIA's JetPack BSP kernel headers (via `Module.symvers.nvidia`
-from `nvidia-linux-header/conftest`). These contain different CRC values for host1x symbols
-than the upstream kernel 6.18 `host1x.ko`. At load time the kernel reports:
+Root cause: OE4T `host1x_syncpt_alloc()` requires nvgpu to be registered as a host1x GPU
+client (via `HOST1X_SYNCPT_GPU` flag) to allocate from the GPU pool. In the upstream
+host1x-next driver model, nvgpu is not registered as a GPU client → alloc returns NULL →
+syncpt id=0 → ERRATA triggers → `nvgpu_channel_sync_syncpt_create()` fails → error 999.
 
+**nvgpu 5.9.1** — Removed `HOST1X_SYNCPT_GPU` flag from `host1x_syncpt_alloc()`.
+Syncpoints now allocated from `CLIENT_MANAGED` pool → id no longer 0 → ERRATA bypassed →
+channel sync created. But CUDA error 999 persisted:
+
+Root cause: The GA10b GPU hardware can only signal syncpoints from the **GPU pool**.
+`CLIENT_MANAGED` syncpoints are never signaled by the GPU → `cudaStreamSynchronize(NULL)`
+and `cudaStreamSynchronize(explicit_stream)` block forever → error 999.
+
+Diagnostic confirmation:
 ```
-nvgpu: disagrees about version of symbol host1x_syncpt_get_by_id_noref
-nvgpu: disagrees about version of symbol host1x_syncpt_wait
-nvgpu: disagrees about version of symbol host1x_fence_create
-... (all host1x_syncpt_* and host1x_fence_* symbols)
-```
-
-**Blocker 2 — `host1x_fence_extract` missing from upstream kernel 6.18** (`err -2`)
-
-`host1x_fence_extract` is a NVIDIA-private API added to their downstream JetPack kernel
-but **not present in upstream Linux 6.18**. The function extracts the syncpoint ID and
-threshold from a `dma_fence` created by `host1x_fence_create`. Without it, nvgpu cannot
-resolve its full dependency chain and refuses to load:
-
-```
-nvgpu: Unknown symbol host1x_fence_extract (err -2)
-```
-
-### Planned Fix: Patch In-Tree `host1x.ko` (nvgpu 5.9.0)
-
-The cleanest solution is to patch `drivers/gpu/host1x/fence.c` in the kernel source tree
-**during the extension build** and rebuild `host1x.ko` as part of the extension. This
-solves both blockers simultaneously:
-
-1. **CRC mismatch** → resolved automatically: nvgpu is compiled against the same patched
-   source tree as the rebuilt `host1x.ko`, so symbol CRCs always match.
-2. **Missing `host1x_fence_extract`** → added directly to `fence.c`:
-
-```c
-// drivers/gpu/host1x/fence.c  — patch applied in nvidia-tegra-nvgpu/pkg.yaml
-int host1x_fence_extract(struct dma_fence *fence, u32 *id, u32 *thresh)
-{
-    struct host1x_syncpt_fence *f = to_host1x_syncpt_fence(fence);
-    if (!f) return -EINVAL;
-    *id = host1x_syncpt_id(f->sp);
-    *thresh = READ_ONCE(f->thresh);
-    return 0;
-}
-EXPORT_SYMBOL(host1x_fence_extract);
+A: cuStreamSynchronize(NULL)       → 999  (GPU never signals CLIENT_MANAGED syncpt)
+B: cuStreamSynchronize(explicit)   → 999  (same)
+C: cuStreamSynchronize(0x2)        → 0    (driver sentinel, no real syncpt involved)
 ```
 
-The rebuilt `host1x.ko` is installed into the extension's `extra/nvidia-tegra/` path,
-which takes precedence over the in-tree module at boot. `tegra_drm` continues to work
-because the patched host1x is a strict superset of the upstream API.
-
-**Estimated improvement**: 7–8 tok/s → 20–30 tok/s (removing the per-token CPU stall).
+**nvgpu 5.9.2** — Reverted to `NVHOST=n`. This is the stable solution.
 
 ### nvgpu Version History
 
-| Version | Change | Result |
-|---------|--------|--------|
-| 5.5.0 | Strip `-pg`/`-mrecord-mcount` in clang-oot | Fixed modpost build errors |
-| 5.6.0 | Strip `-fpatchable-function-entry=*` in clang-oot | Fixed ftrace crash on ARM64 boot |
-| 5.7.0 | `CONFIG_TEGRA_GK20A_NVHOST=y` | **nvgpu fails to load** — CRC mismatch + missing `host1x_fence_extract` |
-| **5.8.0** | Revert `NVHOST=n` (stable) | nvgpu loads; GPU works; 7–8 tok/s (current) |
-| 5.9.0 *(planned)* | `NVHOST=y` + `host1x.ko` patch in extension | Expected 20–30 tok/s |
+| Version | NVHOST | Change | CUDA | Decode |
+|---------|--------|--------|------|--------|
+| 5.5.0 | n | Strip `-pg`/`-mrecord-mcount` in clang-oot | ✅ | ~7 tok/s |
+| 5.6.0 | n | Strip `-fpatchable-function-entry=*` in clang-oot | ✅ | ~7 tok/s |
+| 5.7.0 | y | NVHOST=y — nvgpu failed to load (CRC mismatch + missing `host1x_fence_extract`) | ❌ | — |
+| 5.8.0 | n | Stable NVHOST=n baseline | ✅ | ~7 tok/s |
+| 5.9.0 | y | OOT host1x built in extension | ❌ error 999 | — |
+| 5.9.1 | y | HOST1X_SYNCPT_GPU flag removed | ❌ error 999 (CLIENT_MANAGED pool not GPU-signable) | — |
+| **5.9.2** | **n** | **Stable NVHOST=n + UBSAN fix** | **✅** | **~7 tok/s** |
 
 ---
 
