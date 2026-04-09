@@ -702,3 +702,113 @@ archived here as documentation for future reference.
 | 5.9.3 | y | OOT host1x + id=0 skip awk (flags on 2 lines → awk never matched) | ❌ error 999 | — |
 | 5.9.4 | y | Fix awk: match `return host1x_syncpt_id(sp)` directly → 2→1 nvrm errors | ❌ error 999 | — |
 | 5.9.5 | y | Fix host1x syncpt.c kref_init (already present) — L4T nvhost blocker confirmed | ❌ error 999 | — |
+| 5.10.0 | shim | nvhost-ctrl-shim module: /dev/nvhost-ctrl via OOT host1x — wrong ioctl nrs, USB boot mask | ❌ error 999 | — |
+| 5.10.1 | shim | shim debug logging added — nr=9 (SYNCPT_WAITMEX) + nr=14 (GET_CHARACTERISTICS) identified | ❌ error 999 | — |
+| 5.10.2 | shim | retry loop in nvgpu nvhost_host1x.c — shim still missing SYNCPT_WAITMEX (nr=9) | ❌ error 999 | — |
+| **5.10.3** | **shim** | **SYNCPT_WAITMEX + GET_CHARACTERISTICS implemented → interrupt-driven wait** | **🔄 in progress** | **?** |
+
+---
+
+## Bug 16 — Jetson Boots from USB Instead of NVMe (talosctl upgrade silently ineffective)
+
+**Symptom**: `talosctl upgrade` completes successfully (`removing fallback entry` confirmed),
+but extension versions never change — always 5.10.0 regardless of how many upgrades run.
+
+**Discovery**: 2026-04-09. EFI NVRAM analysis via `talosctl read /sys/firmware/efi/efivars/BootCurrent-*`.
+
+**Root cause chain**:
+
+```
+BootCurrent = 0x0008 (Boot0008 = "Kingston DataTraveler 3.0")
+BootOrder   = 0008, 0009, 0001, ...
+                │       └── Boot0009 = "Talos Linux UKI" → NVMe \EFI\boot\BOOTAA64.efi
+                └── USB stick plugged in → NVIDIA EDK2 UEFI always adds USB at top
+
+talosctl upgrade → writes new UKI to NVMe EFI partition (Boot0009)
+                → reboots → UEFI sees Boot0008 (USB) first → boots USB's old 5.10.0 UKI
+```
+
+The NVIDIA Jetson's EDK2 UEFI firmware automatically inserts the USB boot entry at the top
+of the boot order whenever a USB storage device is detected. Every reboot with the USB stick
+inserted booted the original 5.10.0 USB image, not the NVMe-installed 5.10.2.
+
+**Fix**: Remove USB stick. Jetson falls back to Boot0009 (NVMe `\EFI\boot\BOOTAA64.efi`),
+which contained the 5.10.2 UKI correctly written by the last `talosctl upgrade`.
+
+**Result**: Extension versions correctly updated to 5.10.2 after removing USB and rebooting.
+
+**Prevention**: Either remove USB stick before every reboot, or change Jetson UEFI boot
+order settings to permanently prefer NVMe. The standard `talosctl upgrade` workflow works
+correctly once the USB is removed.
+
+---
+
+## Bug 17 — nvhost-ctrl-shim: Missing SYNCPT_WAITMEX and GET_CHARACTERISTICS
+
+**Symptom**: CUDA 12.6 (JetPack 6) crashes with `CUDA error: unknown error` at
+`cudaStreamSynchronize` even after nvhost-ctrl-shim is loaded and `/dev/nvhost-ctrl` exists
+in the container. GPU is detected (15.2 GiB), model loads to GPU (25/25 layers), but first
+inference fails.
+
+**Discovery**: 2026-04-09. Analysis via `talosctl dmesg | grep nvhost-ctrl-shim`.
+
+**Root cause**:
+
+The shim implements the nvhost-ctrl ioctls based on an older API assumption:
+- `NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE` (nr=11) — implemented but NEVER CALLED by CUDA 12.6
+- Actual CUDA 12.6 calls two different ioctls entirely:
+
+| ioctl value | nr | struct size | name | shim status |
+|-------------|-----|-------------|------|-------------|
+| `0xc010480e` | 14 | 16 bytes | `NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS` | ❌ missing |
+| `0xc0204809` | 9  | 32 bytes | `NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX`      | ❌ missing |
+
+**CUDA 12.6 flow on Jetson (JetPack 6)**:
+1. Opens `/dev/nvhost-ctrl`
+2. Calls `GET_CHARACTERISTICS` (nr=14) to discover num_syncpts, syncpts_base, etc.
+3. For `cudaStreamSynchronize`: calls `SYNCPT_WAITMEX` (nr=9) — a **blocking wait** directly
+   in the kernel until syncpoint `id` reaches threshold `thresh`
+4. Never calls `SYNC_FENCE_CREATE` (nr=11) — that is used by different code paths only
+
+**Struct definitions** (from `linux-nv-oot/include/uapi/linux/nvhost_ioctl.h`):
+
+```c
+// nr=9, 32 bytes — blocking wait until syncpt value >= thresh
+struct nvhost_ctrl_syncpt_waitmex_args {
+    __u32 id;       // syncpoint id (in)
+    __u32 thresh;   // wait threshold (in)
+    __s32 timeout;  // timeout ms, -1=infinite (in)
+    __u32 value;    // syncpt value after wait (out)
+    __u32 tv_sec;   // timestamp seconds (out)
+    __u32 tv_nsec;  // timestamp ns (out)
+    __u32 clock_id; // clock selector (in)
+    __u32 reserved;
+};
+
+// nr=14, 16 bytes — host1x capability query
+struct nvhost_ctrl_get_characteristics {
+    __u64 nvhost_characteristics_buf_size;   // in/out: buffer size
+    __u64 nvhost_characteristics_buf_addr;   // in: pointer to nvhost_characteristics
+};
+
+struct nvhost_characteristics {
+    __u64 flags;           // NVHOST_CHARACTERISTICS_* flags
+    __u32 num_mlocks;
+    __u32 num_syncpts;     // total syncpoints (Orin: 704)
+    __u32 syncpts_base;    // base id (0)
+    __u32 syncpts_limit;   // limit id (704)
+    __u32 num_hw_pts;
+    __u32 padding;
+};
+```
+
+**Fix** (nvgpu 5.10.3 — in progress):
+Implement `SYNCPT_WAITMEX` using interrupt-driven `dma_fence_wait_timeout`:
+```c
+fence = host1x_fence_create(sp, args.thresh, true);
+dma_fence_wait_timeout(fence, true, timeout_jiffies);  // sleeps until HW interrupt
+dma_fence_put(fence);
+args.value = host1x_syncpt_read(sp);
+```
+
+Implement `GET_CHARACTERISTICS` returning Orin hardware values (704 syncpoints).

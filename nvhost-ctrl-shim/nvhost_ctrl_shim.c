@@ -7,25 +7,35 @@
 //
 // This allows libnvrm_host1x.so (JetPack 6 CUDA runtime) to use hardware
 // syncpoint interrupts for cudaStreamSynchronize — replacing the CPU semaphore
-// busy-wait of NVHOST=n with interrupt-driven sync (~3-4x faster decode).
+// busy-wait with interrupt-driven sync.
 //
 // Symbol dependencies (all from host1x.ko):
 //   host1x_syncpt_get_by_id_noref, host1x_syncpt_read, host1x_syncpt_read_max,
 //   host1x_fence_create, host1x_fence_extract
 //
-// Supported ioctls:
-//   NVHOST_IOCTL_CTRL_GET_VERSION       (7)  → return 0
-//   NVHOST_IOCTL_CTRL_SYNCPT_READ       (1)  → host1x_syncpt_read()
-//   NVHOST_IOCTL_CTRL_SYNCPT_READ_MAX   (8)  → host1x_syncpt_read_max()
-//   NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE (11) → host1x_fence_create() → sync_file fd
-//   NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT (19) → sync_file fd → host1x_fence_extract()
+// Supported ioctls (from linux-nv-oot/include/uapi/linux/nvhost_ioctl.h):
+//   NVHOST_IOCTL_CTRL_GET_VERSION          (7)  → return 1
+//   NVHOST_IOCTL_CTRL_SYNCPT_READ          (1)  → host1x_syncpt_read()
+//   NVHOST_IOCTL_CTRL_SYNCPT_READ_MAX      (8)  → host1x_syncpt_read_max()
+//   NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX       (9)  → dma_fence_wait_timeout() [interrupt-driven]
+//   NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE    (11) → host1x_fence_create() → sync_file fd
+//   NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS  (14) → return Orin hw syncpt info
+//   NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT    (19) → sync_file fd → host1x_fence_extract()
 //
 // Targets kernel 6.18 (Talos v1.12.6):
 //   - class_create() without THIS_MODULE (kernel 6.4+)
 //   - devnode() callback with const struct device * (kernel 6.2+)
 //   - close_fd() (kernel 5.11+, replaces __close_fd)
+//
+// CUDA 12.6 (JetPack 6) call sequence:
+//   1. open(/dev/nvhost-ctrl)
+//   2. GET_CHARACTERISTICS (nr=14): discover num_syncpts=704 etc.
+//   3. SYNCPT_WAITMEX (nr=9): blocking wait for syncpt id/thresh → interrupt-driven
+//   Note: SYNC_FENCE_CREATE (nr=11) is NOT called by CUDA 12.6 directly but kept
+//         for other potential callers (e.g. media codecs, test tools).
 
 #include <linux/cdev.h>
+#include <linux/delay.h>
 #include <linux/dma-fence-array.h>
 #include <linux/fdtable.h>
 #include <linux/file.h>
@@ -40,19 +50,34 @@
 #include <linux/uaccess.h>
 
 // ── NVHOST uapi structs (from linux-nv-oot/include/uapi/linux/nvhost_ioctl.h) ──
-// Embedded directly to avoid uapi header path issues.
+// Embedded directly to avoid uapi header path issues in OOT build.
 
 #define NVHOST_IOCTL_MAGIC 'H'
 
+// nr=7: GET_VERSION
 struct nvhost_get_param_args {
 	__u32 value;
 } __packed;
 
+// nr=1,8: SYNCPT_READ / SYNCPT_READ_MAX
 struct nvhost_ctrl_syncpt_read_args {
 	__u32 id;
 	__u32 value;
 };
 
+// nr=9: SYNCPT_WAITMEX — blocking wait until syncpt.value >= thresh
+struct nvhost_ctrl_syncpt_waitmex_args {
+	__u32 id;        /* syncpoint id (in) */
+	__u32 thresh;    /* wait until value >= thresh (in) */
+	__s32 timeout;   /* timeout in ms; -1 = wait forever (in) */
+	__u32 value;     /* syncpt value after wait (out) */
+	__u32 tv_sec;    /* timestamp seconds (out) */
+	__u32 tv_nsec;   /* timestamp nanoseconds (out) */
+	__u32 clock_id;  /* clock selector (in, ignored) */
+	__u32 reserved;
+};
+
+// nr=10,11: SYNC_FENCE_CREATE (nr=10 is 32-bit compat, nr=11 is 64-bit)
 struct nvhost_ctrl_sync_fence_info {
 	__u32 id;
 	__u32 thresh;
@@ -65,11 +90,33 @@ struct nvhost_ctrl_sync_fence_create_args {
 	__u64 name;    /* const char __user * — ignored, fences are anonymous */
 };
 
+// nr=14: GET_CHARACTERISTICS — host1x capability discovery
+struct nvhost_characteristics {
+#define NVHOST_CHARACTERISTICS_GFILTER                    (1 << 0)
+#define NVHOST_CHARACTERISTICS_RESOURCE_PER_CHANNEL_INSTANCE (1 << 1)
+#define NVHOST_CHARACTERISTICS_SUPPORT_PREFENCES          (1 << 2)
+	__u64 flags;
+	__u32 num_mlocks;
+	__u32 num_syncpts;
+	__u32 syncpts_base;
+	__u32 syncpts_limit;
+	__u32 num_hw_pts;
+	__u32 padding;
+};
+
+struct nvhost_ctrl_get_characteristics {
+	__u64 nvhost_characteristics_buf_size;
+	__u64 nvhost_characteristics_buf_addr;
+};
+
+// nr=19: SYNC_FILE_EXTRACT
 struct nvhost_ctrl_sync_file_extract {
 	__s32 fd;
 	__u32 num_fences;
 	__u64 fences_ptr; /* struct nvhost_ctrl_sync_fence_info __user * */
 };
+
+// ── Ioctl definitions ─────────────────────────────────────────────────────────
 
 #define NVHOST_IOCTL_CTRL_SYNCPT_READ \
 	_IOWR(NVHOST_IOCTL_MAGIC, 1, struct nvhost_ctrl_syncpt_read_args)
@@ -77,10 +124,17 @@ struct nvhost_ctrl_sync_file_extract {
 	_IOR(NVHOST_IOCTL_MAGIC, 7, struct nvhost_get_param_args)
 #define NVHOST_IOCTL_CTRL_SYNCPT_READ_MAX \
 	_IOWR(NVHOST_IOCTL_MAGIC, 8, struct nvhost_ctrl_syncpt_read_args)
+#define NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX \
+	_IOWR(NVHOST_IOCTL_MAGIC, 9, struct nvhost_ctrl_syncpt_waitmex_args)
 #define NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE \
 	_IOWR(NVHOST_IOCTL_MAGIC, 11, struct nvhost_ctrl_sync_fence_create_args)
+#define NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS \
+	_IOWR(NVHOST_IOCTL_MAGIC, 14, struct nvhost_ctrl_get_characteristics)
 #define NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT \
 	_IOWR(NVHOST_IOCTL_MAGIC, 19, struct nvhost_ctrl_sync_file_extract)
+
+// Jetson Orin (Tegra234) hardware syncpoint count
+#define ORIN_NUM_SYNCPTS 704
 
 // ── Module state ──────────────────────────────────────────────────────────────
 
@@ -167,6 +221,107 @@ static int ioctl_syncpt_read(struct host1x *host1x, void __user *data,
 			      : host1x_syncpt_read(sp);
 
 	return copy_to_user(data, &args, sizeof(args)) ? -EFAULT : 0;
+}
+
+// ── NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX ─────────────────────────────────────────
+// Blocking wait until syncpt[id].value >= thresh, using interrupt-driven
+// dma_fence_wait_timeout (host1x hardware interrupt, NOT CPU busy-poll).
+
+static int ioctl_syncpt_waitmex(struct host1x *host1x, void __user *data)
+{
+	struct nvhost_ctrl_syncpt_waitmex_args args;
+	struct host1x_syncpt *sp;
+	struct dma_fence *fence;
+	long timeout_jiffies;
+	long ret;
+
+	if (copy_from_user(&args, data, sizeof(args)))
+		return -EFAULT;
+
+	pr_info("nvhost-ctrl-shim: SYNCPT_WAITMEX id=%u thresh=%u timeout=%d\n",
+		args.id, args.thresh, args.timeout);
+
+	sp = host1x_syncpt_get_by_id_noref(host1x, args.id);
+	if (!sp) {
+		pr_err("nvhost-ctrl-shim: SYNCPT_WAITMEX id=%u not found\n",
+		       args.id);
+		return -EINVAL;
+	}
+
+	// timeout: -1 or 0 → wait forever; >0 → milliseconds
+	if (args.timeout <= 0)
+		timeout_jiffies = MAX_SCHEDULE_TIMEOUT;
+	else
+		timeout_jiffies = msecs_to_jiffies((unsigned int)args.timeout);
+
+	// Create a fence that signals when syncpt reaches thresh
+	fence = host1x_fence_create(sp, args.thresh, true);
+	if (IS_ERR(fence)) {
+		pr_err("nvhost-ctrl-shim: SYNCPT_WAITMEX fence_create failed: %ld\n",
+		       PTR_ERR(fence));
+		return PTR_ERR(fence);
+	}
+
+	// Sleep until hardware interrupt signals the fence
+	ret = dma_fence_wait_timeout(fence, true, timeout_jiffies);
+	dma_fence_put(fence);
+
+	if (ret < 0) {
+		pr_err("nvhost-ctrl-shim: SYNCPT_WAITMEX wait error: %ld\n", ret);
+		return ret;
+	}
+	if (ret == 0) {
+		pr_warn("nvhost-ctrl-shim: SYNCPT_WAITMEX timeout id=%u thresh=%u\n",
+			args.id, args.thresh);
+		return -ETIMEDOUT;
+	}
+
+	args.value  = host1x_syncpt_read(sp);
+	args.tv_sec = 0;
+	args.tv_nsec = 0;
+
+	pr_info("nvhost-ctrl-shim: SYNCPT_WAITMEX done id=%u value=%u\n",
+		args.id, args.value);
+
+	return copy_to_user(data, &args, sizeof(args)) ? -EFAULT : 0;
+}
+
+// ── NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS ────────────────────────────────────
+// CUDA calls this on every open to discover available syncpoints.
+
+static int ioctl_get_characteristics(void __user *data)
+{
+	struct nvhost_ctrl_get_characteristics req;
+	struct nvhost_characteristics chars = {
+		.flags         = NVHOST_CHARACTERISTICS_SUPPORT_PREFENCES,
+		.num_mlocks    = 0,
+		.num_syncpts   = ORIN_NUM_SYNCPTS,
+		.syncpts_base  = 0,
+		.syncpts_limit = ORIN_NUM_SYNCPTS,
+		.num_hw_pts    = ORIN_NUM_SYNCPTS,
+		.padding       = 0,
+	};
+	__u64 copy_size;
+
+	if (copy_from_user(&req, data, sizeof(req)))
+		return -EFAULT;
+
+	pr_info("nvhost-ctrl-shim: GET_CHARACTERISTICS buf_size=%llu\n",
+		req.nvhost_characteristics_buf_size);
+
+	if (!req.nvhost_characteristics_buf_addr) {
+		// Only querying the required size
+		req.nvhost_characteristics_buf_size = sizeof(chars);
+		return copy_to_user(data, &req, sizeof(req)) ? -EFAULT : 0;
+	}
+
+	copy_size = min_t(__u64, req.nvhost_characteristics_buf_size, sizeof(chars));
+	if (copy_to_user(u64_to_user_ptr(req.nvhost_characteristics_buf_addr),
+			 &chars, copy_size))
+		return -EFAULT;
+
+	req.nvhost_characteristics_buf_size = sizeof(chars);
+	return copy_to_user(data, &req, sizeof(req)) ? -EFAULT : 0;
 }
 
 // ── NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE ──────────────────────────────────────
@@ -393,8 +548,12 @@ static long nvhost_ctrl_ioctl(struct file *file, unsigned int cmd,
 		return ioctl_syncpt_read(host1x, data, false);
 	case NVHOST_IOCTL_CTRL_SYNCPT_READ_MAX:
 		return ioctl_syncpt_read(host1x, data, true);
+	case NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX:
+		return ioctl_syncpt_waitmex(host1x, data);
 	case NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE:
 		return ioctl_sync_fence_create(host1x, data);
+	case NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS:
+		return ioctl_get_characteristics(data);
 	case NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT:
 		return ioctl_sync_file_extract(host1x, data);
 	default:
