@@ -1,0 +1,17 @@
+#!/bin/sh
+# pre-commit: enforce GPG-signed commits for this repository.
+# Activated via: git config core.hooksPath .githooks
+# (set automatically by scripts/setup-keys.sh, or run manually once per clone)
+
+if [ "$(git config --bool commit.gpgsign)" != "true" ]; then
+  echo "ERROR: commit.gpgSign is not enabled for this repository."
+  echo "Run: git config commit.gpgSign true"
+  exit 1
+fi
+
+SIGNING_KEY=$(git config user.signingKey)
+if [ -z "$SIGNING_KEY" ]; then
+  echo "ERROR: user.signingKey is not configured for this repository."
+  echo "Run: git config user.signingKey <your-key-id>"
+  exit 1
+fi
