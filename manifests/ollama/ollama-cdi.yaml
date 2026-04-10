@@ -110,6 +110,13 @@ spec:
               value: "6"
             - name: CUDA_LAUNCH_BLOCKING
               value: "0"
+            # KV cache quantization — halves KV cache memory bandwidth at negligible quality cost.
+            # q8_0: 8-bit KV cache (recommended default — good quality/speed tradeoff)
+            # q4_0: 4-bit KV cache (more aggressive, noticeable on long contexts)
+            # Helps especially for 7b+ models with long contexts where KV cache
+            # competes with weight memory bandwidth.
+            - name: OLLAMA_KV_CACHE_TYPE
+              value: "q8_0"
             # LD_LIBRARY_PATH is injected automatically by the CDI spec.
             # No manual env override needed.
           resources:
