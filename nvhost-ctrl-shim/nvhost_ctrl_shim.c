@@ -267,11 +267,28 @@ static int ioctl_syncpt_waitmex(struct host1x *host1x, void __user *data)
 		return -EINVAL;
 	}
 
-	// timeout: -1 or 0 → wait forever; >0 → milliseconds
-	if (args.timeout <= 0)
+	// timeout: -1 → wait forever; 0 → wait forever; >0 → milliseconds.
+	//
+	// GA10B (Jetson Orin NX) is slower than desktop GPUs. CUDA's built-in
+	// timeout for cudaStreamSynchronize may expire before large-model kernels
+	// (e.g. qwen2.5:7b warmup with 311 MiB compute buffer) complete on GA10B.
+	// Enforce a minimum wait of 30 s so slow-but-valid kernels are not aborted.
+	// This also logs the CUDA-requested timeout for diagnostics.
+	if (args.timeout < 0) {
+		// -1 = wait forever
 		timeout_jiffies = MAX_SCHEDULE_TIMEOUT;
-	else
-		timeout_jiffies = msecs_to_jiffies((unsigned int)args.timeout);
+	} else if (args.timeout == 0) {
+		// 0 = also treat as "wait forever" (no timeout specified)
+		timeout_jiffies = MAX_SCHEDULE_TIMEOUT;
+	} else {
+		// Clamp to minimum 30 000 ms so GA10B large-model kernels are not
+		// prematurely killed by CUDA's default short timeout.
+		unsigned int timeout_ms = max_t(unsigned int,
+					        (unsigned int)args.timeout, 30000U);
+		pr_debug("nvhost-ctrl-shim: SYNCPT_WAITMEX cuda_timeout=%dms → using %ums\n",
+			 args.timeout, timeout_ms);
+		timeout_jiffies = msecs_to_jiffies(timeout_ms);
+	}
 
 	// Create a fence that signals when syncpt reaches thresh
 	fence = host1x_fence_create(sp, args.thresh, true);
@@ -290,8 +307,8 @@ static int ioctl_syncpt_waitmex(struct host1x *host1x, void __user *data)
 		return ret;
 	}
 	if (ret == 0) {
-		pr_warn("nvhost-ctrl-shim: SYNCPT_WAITMEX timeout id=%u thresh=%u\n",
-			args.id, args.thresh);
+		pr_warn("nvhost-ctrl-shim: SYNCPT_WAITMEX timeout id=%u thresh=%u (cuda_timeout=%dms)\n",
+			args.id, args.thresh, args.timeout);
 		return -ETIMEDOUT;
 	}
 
