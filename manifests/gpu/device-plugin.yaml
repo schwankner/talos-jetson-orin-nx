@@ -46,12 +46,10 @@ spec:
       tolerations:
         - operator: Exists
       priorityClassName: system-node-critical
-      imagePullSecrets:
-        - name: ghcr-pull-secret
       containers:
         - name: jetson-device-plugin
           image: ghcr.io/schwankner/jetson-device-plugin:v1.0.0
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
           resources:

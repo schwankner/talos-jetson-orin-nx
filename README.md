@@ -169,10 +169,11 @@ reComputer J4012 which provides NVMe, 2× GbE, and a standard UART TCU connector
 7. [GitHub Actions Pipeline](#7-github-actions-pipeline)
 8. [Build Pipeline Details](#8-build-pipeline-details)
 9. [Component Versions](#9-component-versions)
-10. [Known Bugs and Limitations](#10-known-bugs-and-limitations)
-11. [Known Limitations](#11-known-limitations)
+10. [Known Bugs](#10-known-bugs-and-limitations)
+11. [Design Limitations](#11-known-limitations)
 12. [Contributing](#12-contributing)
 13. [References](#13-references)
+14. [AI Disclaimer](#14-ai-disclaimer)
 
 ---
 
@@ -211,12 +212,14 @@ sudo dd if=talos-usb-nvgpu5.10.7.raw of=/dev/sdX bs=4M status=progress && sync
 
 #### Prerequisites
 
-> ⚠️ **JetPack 6.2 (L4T r36.5) must be flashed to the Jetson before booting this image.**
+> ⚠️ **JetPack 6.2 (L4T r36.5) must be present on the Jetson before installing this image.**
 >
 > The GPU firmware files (`pmu_pkc_prod_sig.bin` and friends) are sourced from JetPack r36.5.
 > Older JetPack versions (6.1 / r36.4 or earlier) will cause the nvgpu driver to fail at firmware load.
 >
-> Flash JetPack 6.2 using [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager) **before** proceeding.
+> Jetsons ship with JetPack pre-installed. If yours already runs JetPack 6.2 (r36.5), proceed directly
+> to [Boot & Install](#boot--install). If it runs an older version, update to JetPack 6.2 first using
+> [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager).
 
 #### Boot & Install
 
@@ -552,6 +555,8 @@ For most users, the [pre-built release image](#1-installation) is the right choi
 ```bash
 # 1. Generate signing key (once per repo clone / fork)
 ./scripts/00-setup-keys.sh
+# If you want CI builds to work in a fork, also add the generated keys as
+# GitHub Actions secrets — see §7 (GitHub Actions Pipeline → Required GitHub Secrets).
 
 # 2. Build all extensions + kernel (~60–90 min, cold cache)
 make build-extensions
