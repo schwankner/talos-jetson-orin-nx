@@ -460,7 +460,7 @@ sysfs. It targets the GPU devfreq node at `/sys/bus/platform/devices/17000000.gp
 | `15W` | 4 | 1,421 MHz | 612 MHz | `nvhost_podgov` | Factory NVIDIA default |
 | `25W` | 8 | 1,498 MHz | 408 MHz | `nvhost_podgov` | CPU-heavy workloads |
 | **`MAXN`** | **8** | **1,984 MHz** | **918 MHz** | **`performance`** | **AI inference ← DEFAULT** |
-| `MAXN_SUPER` | 8 | 1,984 MHz | >918 MHz | `performance` | ⛔ **Blocked on J401** |
+| `MAXN_SUPER` | 8 | 1,984 MHz | up to 1,173 MHz | `performance` | ⛔ **Blocked on J401** — no inference benefit (memory-bandwidth-bound) |
 
 ### Changing the Power Mode
 
@@ -494,8 +494,10 @@ env:
     value: "true"       # ← explicit acknowledgement of thermal risk
 ```
 
-> This will push the GPU beyond 918 MHz (up to 1173 MHz on Orin NX 16 GB). The DaemonSet logs
-> a prominent warning when this override is active.
+> This will allow the GPU to boost up to 1,173 MHz (Orin NX 16 GB). The DaemonSet logs a
+> prominent warning when this override is active. **Note:** LLM inference is memory-bandwidth-bound
+> on the GA10B — tested at 1,173 MHz, decode throughput remains at ~11–12 tok/s (identical to
+> MAXN at 918 MHz). Higher GPU clocks do not help if the bottleneck is LPDDR5 bandwidth.
 
 ### Verify Frequencies at Runtime
 
