@@ -1,0 +1,109 @@
+name: Update Talos + Kernel versions
+
+# Runs daily. Fetches the latest stable Talos release, then reads the exact
+# kernel version that Talos uses from siderolabs/pkgs Pkgfile (same source
+# Talos itself uses to build its kernel). Updates TALOS_VERSION and
+# KERNEL_VERSION in scripts/common.sh atomically so they always stay in sync.
+#
+# If both already match → no commit, workflow exits cleanly.
+# If something changed → commits scripts/common.sh → auto-tag.yaml sees the
+# version bump and triggers release.yaml to build a new USB image.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # daily at 06:00 UTC
+  workflow_dispatch:       # allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  update-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch latest stable Talos release
+        id: talos
+        run: |
+          LATEST=$(curl -fsSL https://api.github.com/repos/siderolabs/talos/releases/latest \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          echo "Talos latest stable: $LATEST"
+          echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+
+      - name: Derive matching kernel version from siderolabs/pkgs
+        id: kernel
+        run: |
+          TALOS_VERSION="${{ steps.talos.outputs.version }}"
+          # Talos v1.12.x → pkgs branch release-1.12
+          BRANCH="release-$(echo "$TALOS_VERSION" | sed 's/^v//' | cut -d. -f1,2)"
+          echo "pkgs branch: $BRANCH"
+
+          # Read the kernel version directly from the Pkgfile (same source Talos uses)
+          KERNEL=$(curl -fsSL \
+            "https://raw.githubusercontent.com/siderolabs/pkgs/${BRANCH}/Pkgfile" \
+            | grep '^\s*linux_version:' \
+            | head -1 \
+            | sed 's/.*linux_version:\s*//' \
+            | tr -d ' ')
+
+          if [ -z "$KERNEL" ]; then
+            echo "ERROR: could not determine kernel version from pkgs branch $BRANCH"
+            exit 1
+          fi
+
+          echo "Kernel version: $KERNEL"
+          echo "version=$KERNEL" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Check current versions in common.sh
+        id: current
+        run: |
+          CUR_TALOS=$(grep 'TALOS_VERSION=' scripts/common.sh \
+            | sed 's/.*:-\([^}]*\).*/\1/')
+          CUR_KERNEL=$(grep 'KERNEL_VERSION=' scripts/common.sh \
+            | sed 's/.*:-\([^}]*\).*/\1/')
+          echo "Current: Talos=$CUR_TALOS  Kernel=$CUR_KERNEL"
+          echo "talos=$CUR_TALOS"  >> "$GITHUB_OUTPUT"
+          echo "kernel=$CUR_KERNEL" >> "$GITHUB_OUTPUT"
+
+      - name: Update common.sh if versions changed
+        id: update
+        run: |
+          NEW_TALOS="${{ steps.talos.outputs.version }}"
+          NEW_KERNEL="${{ steps.kernel.outputs.version }}"
+          CUR_TALOS="${{ steps.current.outputs.talos }}"
+          CUR_KERNEL="${{ steps.current.outputs.kernel }}"
+
+          if [ "$NEW_TALOS" = "$CUR_TALOS" ] && [ "$NEW_KERNEL" = "$CUR_KERNEL" ]; then
+            echo "Nothing to update — already at Talos $NEW_TALOS / Kernel $NEW_KERNEL"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Updating: Talos $CUR_TALOS → $NEW_TALOS  |  Kernel $CUR_KERNEL → $NEW_KERNEL"
+
+          sed -i "s/TALOS_VERSION:-[^}]*/TALOS_VERSION:-${NEW_TALOS}/" scripts/common.sh
+          sed -i "s/KERNEL_VERSION:-[^}]*/KERNEL_VERSION:-${NEW_KERNEL}/" scripts/common.sh
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "new_talos=$NEW_TALOS" >> "$GITHUB_OUTPUT"
+          echo "new_kernel=$NEW_KERNEL" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add scripts/common.sh
+          git commit -m "chore(deps): update Talos to ${{ steps.update.outputs.new_talos }}, kernel to ${{ steps.update.outputs.new_kernel }}
+
+Talos ${{ steps.current.outputs.talos }} → ${{ steps.update.outputs.new_talos }}
+Kernel ${{ steps.current.outputs.kernel }} → ${{ steps.update.outputs.new_kernel }}
+
+Kernel version derived from siderolabs/pkgs ${{ steps.kernel.outputs.branch }}/Pkgfile
+(same source Talos uses internally — versions always in sync)."
+          git push
