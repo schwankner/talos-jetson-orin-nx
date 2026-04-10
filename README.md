@@ -5,7 +5,7 @@
 [![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
 [![nvgpu](https://img.shields.io/badge/nvgpu-5.10.7-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
-[![Build](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml)
+[![Build](https://github.com/schwankner/talos-jetson-orin/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin/actions/workflows/release.yaml)
 
 Run [Talos Linux](https://www.talos.dev/) on any **NVIDIA Jetson Orin** module with full CUDA GPU
 compute support in Kubernetes pods. One USB image boots the entire Orin family (AGX Orin,
@@ -180,20 +180,20 @@ reComputer J4012 which provides NVMe, 2× GbE, and a standard UART TCU connector
 ### Option A — Fresh Install (USB)
 
 No build environment needed. Download the pre-built USB image from the
-[latest release](https://github.com/schwankner/talos-jetson-orin-nx/releases/latest),
+[latest release](https://github.com/schwankner/talos-jetson-orin/releases/latest),
 flash it to a USB drive and boot.
 
 #### Download
 
 ```bash
 # Find the latest release URL
-LATEST=$(curl -s https://api.github.com/repos/schwankner/talos-jetson-orin-nx/releases/latest \
+LATEST=$(curl -s https://api.github.com/repos/schwankner/talos-jetson-orin/releases/latest \
   | grep browser_download_url | grep '\.raw' | cut -d'"' -f4)
 
 curl -L -O "${LATEST}"
 ```
 
-Or go to **[Releases](https://github.com/schwankner/talos-jetson-orin-nx/releases)** and
+Or go to **[Releases](https://github.com/schwankner/talos-jetson-orin/releases)** and
 download the `.raw` file manually.
 
 #### Flash

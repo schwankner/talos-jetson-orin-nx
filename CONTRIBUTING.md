@@ -32,7 +32,7 @@ Minimum: Docker (with BuildKit), `talosctl`, `kubectl`, a local OCI registry, an
 
 ## Reporting Bugs
 
-Open a [GitHub Issue](https://github.com/schwankner/talos-jetson-orin-nx/issues) with:
+Open a [GitHub Issue](https://github.com/schwankner/talos-jetson-orin/issues) with:
 - Talos version, nvgpu extension version
 - Full UART boot log (or relevant dmesg excerpt)
 - Steps to reproduce
