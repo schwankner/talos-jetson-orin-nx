@@ -884,3 +884,46 @@ den Pin in `nvidia-tegra-nvgpu/pkg.yaml` (url + sha256 + sha512) mitpflegen!
 | CUDA Error 999 | ja | **nein** |
 
 dmesg bestätigt: `SYNCPT_WAITMEX done` — Hardware-Syncpoint-Interrupts aktiv.
+
+---
+
+## Bug 19 — CUDA GET_ROWS fails for qwen2.5:7b (embedding dim > 1536)
+
+**Symptom**: `qwen2.5:7b` (Q4_K_M) crashes immediately on first inference with:
+```
+ggml_cuda_compute_forward: GET_ROWS failed
+CUDA error: unknown error
+  current device: 0, in function ggml_cuda_compute_forward
+  //ml/backend/ggml/ggml/src/ggml-cuda/ggml-cuda.cu:2315
+```
+All 29 layers load to GPU successfully (4168 MiB model + 448 MiB KV + 311 MiB compute).
+The crash occurs at the very first `GET_ROWS` op (embedding lookup), before any decode.
+
+**Discovery**: 2026-04-10.
+
+**Models affected**:
+
+| Model | Hidden dim | GPU | CPU fallback |
+|-------|-----------|-----|--------------|
+| qwen2.5:0.5b | 896 | ✅ ~23 tok/s | — |
+| qwen2.5:1.5b | 1536 | ✅ ~18 tok/s | — |
+| **qwen2.5:7b** | **3584** | **❌ crash** | 5.9 tok/s |
+
+**Root cause hypothesis**: The `GET_ROWS` CUDA kernel for Q4_K_M dequantization uses shared
+memory proportional to the hidden dimension. The GA10B (compute capability 8.7) on Jetson
+Orin NX has more limited per-SM resources than desktop GPUs. With hidden dim = 3584, the
+kernel likely exceeds the shared memory budget per thread block on GA10B.
+
+Number of Q4_K_M blocks per row scales with hidden dim:
+- 0.5b: 896 / 256 = 3.5 blocks → works
+- 1.5b: 1536 / 256 = 6 blocks → works
+- 7b: 3584 / 256 = 14 blocks → FAILS
+
+**Status**: ❌ Open — workarounds under investigation.
+
+**Possible fixes to try**:
+1. Pull `qwen2.5:7b-q8_0` or `qwen2.5:7b` in F16 (different kernel path)
+2. Set `GGML_CUDA_DMMV_X` env var to reduce block size
+3. Use partial GPU offload (`num_gpu < 29`) to avoid the large embedding on GPU
+4. Investigate if unknown ioctl nr=16 (`0x80084810`) is needed for larger CUDA workloads
+
