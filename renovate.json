@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Talos Linux on Jetson Orin — dependency update config. Talos + kernel versions are managed by update-talos.yaml workflow (not Renovate) to keep them in sync with siderolabs/pkgs.",
+  "description": "Talos Linux on Jetson Orin — dependency update config. Renovate tracks TALOS_VERSION; KERNEL_VERSION is derived automatically at build time from siderolabs/pkgs (no manual sync needed).",
   "extends": [
     "config:recommended",
     ":dependencyDashboard"
@@ -15,10 +15,18 @@
   "automerge": true,
   "automergeType": "pr",
   "automergeStrategy": "squash",
-  "ignorePaths": [
-    "scripts/common.sh"
-  ],
   "packageRules": [
+    {
+      "description": "Talos stable releases only — no alpha/beta/rc, no minor version jumps. Minor bumps (v1.12 → v1.13) require nvgpu module compatibility testing.",
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["scripts/common.sh"],
+      "matchDepNames": ["siderolabs/talos"],
+      "allowedVersions": "!/alpha|beta|rc/",
+      "matchUpdateTypes": ["patch"],
+      "automerge": false,
+      "labels": ["dependencies", "talos-update"],
+      "commitMessageTopic": "Talos"
+    },
     {
       "description": "GitHub Actions — automerge all updates",
       "matchManagers": ["github-actions"],
@@ -35,6 +43,25 @@
       "description": "Docker base images — require manual review",
       "matchManagers": ["dockerfile"],
       "automerge": false
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Talos version in common.sh — Renovate opens a PR when a new stable patch is released. KERNEL_VERSION is derived automatically at build time from siderolabs/pkgs, no separate tracking needed.",
+      "managerFilePatterns": ["/^scripts/common\\.sh$/"],
+      "matchStrings": ["TALOS_VERSION=\"\\$\\{TALOS_VERSION:-(?<currentValue>[^}\"]+)\\}\""],
+      "depNameTemplate": "siderolabs/talos",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "LLVM toolchain version for nvidia-tegra-nvgpu build",
+      "managerFilePatterns": ["/^scripts/common\\.sh$/"],
+      "matchStrings": ["LLVM_REV=\"\\$\\{LLVM_REV:-(?<currentValue>[^}\"]+)\\}\""],
+      "depNameTemplate": "siderolabs/llvm",
+      "datasourceTemplate": "github-releases"
     }
   ]
 }
