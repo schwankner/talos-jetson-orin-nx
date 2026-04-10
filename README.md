@@ -406,8 +406,8 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 | qwen2.5:0.5b | 397 MB | Q4_K_M | 28/28 | ~1034 tok/s | **~62 tok/s** | ~39 tok/s¹ |
 | qwen2.5:7b | 4.7 GB | Q4_K_M | 29/29 | ~260 tok/s | **~12 tok/s** | ~5.6 tok/s |
 | gemma4:e4b | 9.6 GB | — | all | ~160–275 tok/s | **~12 tok/s** | n/a (OOM) |
-| qwen3.5:9b ²| ~5.5 GB | Q4_K_M | all | ~63 tok/s | **~7.7 tok/s** | n/a |
-| ministral-3:14b | ~8 GB | Q4_K_M | all | ~197 tok/s | **~6.8 tok/s** | n/a |
+| qwen3.5:9b ²| ~6.6 GB | Q4_K_M | all | ~61 tok/s | **~8.6 tok/s** | n/a |
+| ministral-3:14b | ~9.1 GB | Q4_K_M | all | ~197 tok/s | **~7.1 tok/s** | n/a |
 
 > ¹ qwen2.5:0.5b is small enough to benefit from CPU cache locality — ARM Cortex-A78AE at this
 > model size is competitive with GPU. The GPU advantage grows substantially with model size:
@@ -440,8 +440,8 @@ Kubernetes pod via CDI.
 | qwen2.5:0.5b | **~61 tok/s** | ~35 tok/s | **+74%** |
 | qwen2.5:7b | ~12 tok/s | ~13.5 tok/s | −11% |
 | gemma4:e4b (9.6 GB) | ~12 tok/s | ~14.75 tok/s | −19% |
-| qwen3.5:9b ²| ~7.7 tok/s | ~9.8 tok/s | −21% |
-| ministral-3:14b | ~6.8 tok/s | ~8.3 tok/s | −18% |
+| qwen3.5:9b ²| ~8.6 tok/s | ~9.8 tok/s | −12% |
+| ministral-3:14b | ~7.1 tok/s | ~8.3 tok/s | −14% |
 
 > ² qwen3.5:9b is a reasoning (thinking) model — it performs internal chain-of-thought before
 > answering. The decode rate (9.8 tok/s) reflects raw hardware throughput; the model generates
