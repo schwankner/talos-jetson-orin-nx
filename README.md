@@ -356,8 +356,9 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 > ~12 tok/s despite their size difference. This is expected: the GA10B has ~68 GB/s of LPDDR5
 > memory bandwidth, and token decoding is purely memory-bound (one full model read per token).
 > Both models hit the same DRAM throughput ceiling — throwing a larger model at the GPU does
-> not reduce decode speed further, but it also cannot be accelerated beyond this hardware limit
-> without quantization or a faster memory subsystem.
+> not reduce decode speed further, but it also cannot be accelerated beyond this hardware limit.
+> The only practical lever is quantization: lower bit-width means fewer bytes per weight per
+> token, which translates directly to higher decode throughput.
 
 **The common failure mode** on Jetson is Ollama silently falling back to CPU because the GPU
 stack isn't set up correctly (no device plugin, no CDI spec, missing `JETSON_JETPACK=6`). This
