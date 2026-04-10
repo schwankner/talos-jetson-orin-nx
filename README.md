@@ -414,8 +414,8 @@ Kubernetes pod via CDI.
 | qwen2.5:0.5b | ~30 tok/s | ~35 tok/s | −14% |
 | qwen2.5:7b | ~12 tok/s | ~13.5 tok/s | −11% |
 | gemma4:e4b (9.6 GB) | ~12 tok/s | ~14.75 tok/s | −19% |
-| qwen3.5:9b ²| — | ~9.8 tok/s | — |
-| ministral-3:14b | — | ~8.3 tok/s | — |
+| qwen3.5:9b ²| ~7.7 tok/s | ~9.8 tok/s | −21% |
+| ministral-3:14b | ~6.8 tok/s | ~8.3 tok/s | −18% |
 
 > ² qwen3.5:9b is a reasoning (thinking) model — it performs internal chain-of-thought before
 > answering. The decode rate (9.8 tok/s) reflects raw hardware throughput; the model generates
