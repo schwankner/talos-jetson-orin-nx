@@ -14,12 +14,23 @@ REGISTRY_DOCKER="${REGISTRY_DOCKER:-host.docker.internal:5001}"
 CACHE_REGISTRY="${CACHE_REGISTRY:-}"  # set to ghcr.io/<owner>/build-cache in CI
 
 # ── Talos version ────────────────────────────────────────────────────────────
+# Tracked by Renovate — update-talos.yaml is no longer used (removed).
 TALOS_VERSION="${TALOS_VERSION:-v1.12.6}"
-KERNEL_VERSION="${KERNEL_VERSION:-6.18.18}"
 
-# ── siderolabs/pkgs pin (must match the Talos release above) ─────────────────
+# ── siderolabs/pkgs pin (derived from TALOS_VERSION) ─────────────────────────
 PKGS_COMMIT="${PKGS_COMMIT:-a92bed5}"    # exact commit that produced Talos v1.12.6
-PKGS_BRANCH="${PKGS_BRANCH:-release-1.12}"
+PKGS_BRANCH="${PKGS_BRANCH:-release-$(echo "${TALOS_VERSION}" | sed 's/^v//' | cut -d. -f1,2)}"
+
+# ── Kernel version — derived automatically from siderolabs/pkgs ──────────────
+# Reads linux_version from the same Pkgfile Talos uses to build its own kernel.
+# This guarantees KERNEL_VERSION always matches what Talos ships internally.
+# Override via env: KERNEL_VERSION=6.x.y source scripts/common.sh
+if [ -z "${KERNEL_VERSION:-}" ]; then
+  KERNEL_VERSION="$(curl -fsSL \
+    "https://raw.githubusercontent.com/siderolabs/pkgs/${PKGS_BRANCH}/Pkgfile" \
+    | grep '^\s*linux_version:' | head -1 | sed 's/.*linux_version:\s*//' | tr -d ' ')"
+  [ -z "${KERNEL_VERSION}" ] && { echo "[ERROR] Could not determine kernel version from pkgs/${PKGS_BRANCH}" >&2; exit 1; }
+fi
 
 # ── Custom LLVM build used by nvidia-tegra-nvgpu/pkg.yaml ────────────────────
 # These vars must be injected into siderolabs/pkgs/Pkgfile before building
