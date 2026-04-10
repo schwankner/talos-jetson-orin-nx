@@ -14,7 +14,8 @@ Orin NX, Orin Nano) — all share the same T234 SoC, GA10B GPU, and UEFI boot pa
 Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html)**
 (Jetson Orin NX 16 GB). Verified result as of 2026-04-10:
 
-- GPU inference: **~23 tok/s** decode, **~500 tok/s** prefill (qwen2.5:0.5b, 25/25 layers on GPU, Ollama, Flash Attention enabled)
+- GPU inference: **~23 tok/s** decode (qwen2.5:0.5b) / **~18 tok/s** (qwen2.5:1.5b) — all layers on CUDA, Ollama, Flash Attention enabled
+- ⚠️ Models with hidden dim > 1536 (7B+) crash with `GET_ROWS` CUDA error — CPU fallback only (Bug 19)
 - Hardware syncpoint interrupts via `nvhost-ctrl-shim` — `cudaStreamSynchronize` uses interrupt-driven wait (no CPU polling)
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
 
@@ -507,6 +508,7 @@ Notable items relevant to day-to-day use:
 | [Bug 17](BUGS.md) | nvhost-ctrl-shim missing SYNCPT_WAITMEX + GET_CHARACTERISTICS | CUDA error 999 with shim loaded | ✅ Fixed — implemented in nvhost_ctrl_shim.c (5.10.3) |
 | [Bug 18](BUGS.md) | pkg.yaml shim source pin not updated after code change | Old shim code shipped despite version bump | ✅ Fixed — pin `url`+`sha256`+`sha512` in pkg.yaml (5.10.4) |
 | [Bug 9](BUGS.md#bug-9--ubsan-array-index-out-of-bounds-in-netlistc-non-fatal) | UBSAN `netlist.c:617` at every boot | Log noise | ✅ Silenced (flexible array) |
+| [Bug 19](BUGS.md) | `qwen2.5:7b` (7B+ models) crash: `GET_ROWS failed` on GPU | Large models CPU-only | ❌ Open — GA10B shared memory limit hypothesis |
 
 ---
 
