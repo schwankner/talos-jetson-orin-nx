@@ -1,5 +1,5 @@
 # Build stage — cross-compile for linux/arm64
-FROM --platform=linux/arm64 golang:1.25-alpine AS builder
+FROM --platform=linux/arm64 golang:1.26-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
