@@ -14,10 +14,91 @@ Orin NX, Orin Nano) — all share the same T234 SoC, GA10B GPU, and UEFI boot pa
 Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html)**
 (Jetson Orin NX 16 GB). Verified result as of 2026-04-10:
 
-- GPU inference: **~30 tok/s** decode (qwen2.5:0.5b) / **~12 tok/s** (qwen2.5:7b) — all layers on CUDA, Ollama, Flash Attention enabled
-- All models that fit in memory work — qwen2.5:0.5b, qwen2.5:7b etc.
+- GPU inference: **~30 tok/s** decode (qwen2.5:0.5b) / **~12 tok/s** (qwen2.5:7b, gemma4:e4b) — all layers on CUDA
+- All models that fit in memory work — no 7B+ crash since nvgpu 5.10.7
 - Hardware syncpoint interrupts via `nvhost-ctrl-shim` — `cudaStreamSynchronize` uses interrupt-driven wait (no CPU polling)
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
+
+---
+
+## What makes this image different
+
+Running a Jetson Orin with GPU access in Kubernetes is surprisingly hard to do properly. Most
+guides end up with `privileged: true` containers, manual `/dev` bind-mounts, and hardcoded
+library paths — because the generic NVIDIA toolchain simply does not support Tegra.
+This project solves the problem at every layer:
+
+### 1 — Custom CDI-native Kubernetes device plugin
+
+The standard [`nvidia-device-plugin`](https://github.com/NVIDIA/k8s-device-plugin) **does not
+work on Jetson**. It relies on NVML (`libnvidia-ml.so`), which does not exist on Tegra — the
+Tegra GPU stack has no NVML. As a result, `nvidia.com/gpu` cannot be exposed as a Kubernetes
+resource with the upstream plugin.
+
+This project ships a **purpose-built device plugin** (`ghcr.io/schwankner/jetson-device-plugin`)
+that uses the CDI path instead of NVML:
+
+1. Pod requests `resources.limits["nvidia.com/gpu": "1"]`
+2. The plugin returns a `CDIDevices` response: `nvidia.com/gpu=0`
+3. kubelet passes the CDI device ID to containerd via the CRI interface
+4. containerd reads `/var/run/cdi/nvidia-jetson.yaml` and **automatically injects**:
+   - All `/dev/nvgpu/igpu0/*` device nodes
+   - `/dev/nvmap` (GPU memory allocator)
+   - `/dev/nvhost-ctrl` (syncpoint wait — provided by `nvhost-ctrl-shim`)
+   - JetPack r36.5 library bind-mount → `/usr/lib/aarch64-linux-gnu/nvidia`
+   - `LD_LIBRARY_PATH` pointing at the real CUDA libraries
+
+The CDI spec is written dynamically at boot by the `nvidia-cdi-setup` DaemonSet, so it always
+reflects the actual devices present on the node.
+
+### 2 — No manual device mounts or library paths in workload pods
+
+With the official NVIDIA JetPack Ubuntu + Kubernetes approach, every GPU pod must either:
+- run as `privileged: true` with a full `/dev` hostPath mount, or
+- explicitly enumerate each device node (`/dev/nvgpu/igpu0/ctrl`, `/dev/nvmap`, …) and
+  manually bind-mount the JetPack library directory
+
+This is fragile, insecure, and breaks when device nodes change between kernel versions.
+
+With our CDI stack, a GPU pod only needs:
+
+```yaml
+resources:
+  limits:
+    nvidia.com/gpu: "1"    # that's it — containerd handles the rest via CDI
+```
+
+No `privileged: true`. No hostPath volumes. No hardcoded `LD_LIBRARY_PATH`.
+The system-level daemons (`nvidia-cdi-setup`, `nvidia-device-plugin`) run privileged because
+they are node infrastructure — equivalent to kubelet itself needing root. User workloads do not.
+
+> **Note**: The included `manifests/ollama/ollama-cdi.yaml` still sets `privileged: true`
+> as a safety net during initial CDI verification. This can be removed once you have confirmed
+> that CDI injection works correctly on your node — the CDI architecture does not require it.
+
+### 3 — nvhost-ctrl-shim: hardware syncpoint interrupts for CUDA
+
+Without this kernel module, CUDA's `cudaStreamSynchronize` falls back to **CPU semaphore
+polling** — burning CPU cycles waiting for each GPU operation. This cuts inference throughput
+by ~4× (7 tok/s → 30 tok/s on qwen2.5:0.5b).
+
+The shim provides `/dev/nvhost-ctrl` with the full `NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX` interface,
+allowing the CUDA driver to block on a kernel wait queue and be woken by a hardware interrupt
+when the GPU signals the syncpoint. This is how JetPack Ubuntu works — our shim brings the
+same behavior to a custom Talos kernel where the NVIDIA host1x driver (`CONFIG_TEGRA_GK20A_NVHOST`)
+is deliberately disabled (`=n`) to avoid the kernel module signing problem.
+
+### Comparison with official NVIDIA JetPack Ubuntu + Kubernetes
+
+| | Official JetPack Ubuntu + K8s | This project |
+|---|---|---|
+| Device plugin | ❌ None that works on Tegra (no NVML) | ✅ Custom CDI-native plugin |
+| GPU scheduling | ❌ Manual or third-party workarounds | ✅ `nvidia.com/gpu: 1` resource |
+| CDI support | ❌ Not supported for Tegra | ✅ Full CDI stack |
+| Pod privileges | ❌ `privileged: true` + manual `/dev` mounts | ✅ No manual mounts; `privileged` only in system daemons |
+| `cudaStreamSynchronize` | ✅ Hardware interrupts (nvhost in kernel) | ✅ Hardware interrupts via `nvhost-ctrl-shim` |
+| CUDA inference throughput | ✅ ~30 tok/s (0.5b) | ✅ ~30 tok/s (0.5b) — same |
+| Talos / immutable OS | ❌ JetPack ships Ubuntu only | ✅ Talos (immutable, no SSH, Kubernetes-native) |
 
 > ### ⚠️ CUDA Container Compatibility — Read Before You Start
 >
