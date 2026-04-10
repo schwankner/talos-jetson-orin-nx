@@ -957,3 +957,108 @@ nvhost-ctrl-shim: SYNCPT_WAITMEX timeout id=X thresh=Y (cuda_timeout=Zms)
 
 **Status**: ✅ **FIXED** in nvgpu 5.10.7 + ollama/ollama:0.20.5
 
+
+---
+
+## Bug 20 — NVMe EFI Bootloader Not Written When USB Stays In During Post-Install Reboot
+
+**Symptom**: After fresh USB install (`talosctl apply-config --insecure`), the node appears
+functional (port 50000 open, `talosctl version` works). When the USB stick is removed and
+the node reboots, the UEFI shows **"reboot into firmware interface"** and Talos does not
+boot from NVMe.
+
+**Root cause chain**:
+
+```
+1. USB boot → Talos maintenance mode (no STATE on NVMe)
+2. apply-config --insecure → Talos installer runs:
+      → creates GPT partitions on NVMe (EFI, META, STATE, EPHEMERAL)
+      → writes system partition (squashfs)
+      → writes EFI bootloader (systemd-boot + UKI) to nvme0n1p1
+      → reboots
+3. USB still plugged in → UEFI boots USB (higher boot priority)
+4. USB Talos finds STATE partition on NVMe → exits maintenance mode
+      → runs full Talos from USB squashfs, mounts NVMe STATE/EPHEMERAL
+      → logs: "install sequence: 0 phase(s)" (no install needed, STATE exists)
+5. Port 50000 open → appears working, but OS is running from USB
+6. User removes USB → UEFI finds NVMe EFI partition:
+      → systemd-boot loads (from EFI/BOOT/BOOTAA64.EFI) ← written in step 2
+      → scans EFI/Linux/ for UKI entries → EMPTY (never written? or wrong path)
+      → systemd-boot menu shows only: "reboot into firmware interface"
+```
+
+The issue: After step 3, subsequent USB boots skip the EFI population step. Whether the
+UKI was written correctly in step 2 is unclear — possible that the initial install ran
+correctly but the NVRAM boot entry was lost, or that the UKI was not written because the
+installer detected STATE already existed on a previous install attempt.
+
+**Reproducible**: Yes — reliably triggered by leaving USB in after `apply-config`.
+
+**Fix**: Two approaches:
+
+A. **Prevent** — remove USB stick immediately when the node starts rebooting after
+   `apply-config --insecure`. UEFI then boots NVMe directly → EFI is populated and
+   NVRAM entry registered on first NVMe boot.
+
+B. **Recover** — run `talosctl upgrade --preserve --image <installer>` against the
+   running node (from USB). The upgrade sequence rewrites the NVMe system partition
+   and EFI bootloader unconditionally, regardless of USB presence. After the upgrade
+   reboot the node boots from NVMe correctly.
+
+**Status**: ✅ **DOCUMENTED** — README Installation section updated with USB removal
+warning. `manifests/talos/machine-patch-gpu.yaml` provides the correct install.image.
+
+---
+
+## Bug 21 — nvhost_ctrl_shim Not Auto-Loaded: Missing `machine.kernel.modules`
+
+**Symptom**: After a fresh Talos installation with the nvgpu extension, `nvgpu.ko` loads
+(GPU probed via device tree), but `nvhost_ctrl_shim.ko` does **not** load. Result:
+`/dev/nvhost-ctrl` does not exist → `cudaStreamSynchronize` uses CPU polling →
+~7 tok/s inference instead of ~30 tok/s.
+
+```bash
+# Broken state:
+talosctl read /proc/modules | grep nvhost_ctrl_shim   # → no output
+talosctl dmesg | grep nvhost-ctrl-shim               # → no output
+# /dev/nvhost-ctrl does not exist
+```
+
+**Root cause**: `nvhost_ctrl_shim` has **no device tree entry** — it creates a virtual
+`/dev/nvhost-ctrl` device rather than binding to a hardware node. The Linux kernel's
+device-probe mechanism only triggers `request_module()` for modules with matching device
+aliases (ACPI, DT, PCI IDs, etc.). Since the shim has no alias, the kernel never loads it.
+
+The extension's `modprobe.d` softdep (`softdep nvgpu pre: ... nvhost-ctrl-shim ...`)
+**only applies when userspace `modprobe nvgpu` is called explicitly**. When the kernel
+loads nvgpu via device probe → `request_module("nvgpu")`, the kernel calls its own
+internal modprobe path which **does not respect `softdep` declarations** reliably in the
+Talos boot environment.
+
+Confirmed: `nvgpu.ko` loaded, `nvhost_ctrl_shim.ko` not loaded, `/dev/nvhost-ctrl`
+absent, despite correct modprobe.d being present at `/usr/lib/modprobe.d/nvidia-tegra.conf`.
+
+**Fix**: Add explicit `machine.kernel.modules` to the Talos machine config:
+
+```yaml
+machine:
+  kernel:
+    modules:
+      - name: host1x
+      - name: host1x_fence
+      - name: nvhost_ctrl_shim   # ← must load before nvgpu
+      - name: nvmap
+      - name: mc_utils
+      - name: nvgpu
+      - name: governor_pod_scaling
+```
+
+Talos processes `machine.kernel.modules` via machined and calls `modprobe` for each
+module explicitly, in order, before the system boot sequence. This guarantees load order
+regardless of device probe timing.
+
+This config is now shipped as `manifests/talos/machine-patch-gpu.yaml` so users can
+apply it via `--config-patch` during `talosctl gen config`.
+
+**Status**: ✅ **FIXED** — `machine.kernel.modules` added to reference `controlplane.yaml`
+and `machine-patch-gpu.yaml`. README Installation section documents `--config-patch` usage.
