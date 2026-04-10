@@ -74,32 +74,35 @@ spec:
                 POWER_MODE=MAXN
               fi
 
-              # ── Map mode → frequencies & governor ────────────────────────
+              # ── Map mode → frequencies, governor, EMC ────────────────────
               # GPU freq in Hz, CPU max_freq in kHz
+              # EMC_LOCK: whether to pin LPDDR5 to max rate (3199 MHz → ~68 GB/s)
+              #   true  → MAXN / MAXN_SUPER: full memory bandwidth for inference
+              #   false → 10W / 15W / 25W: let BPMP scale EMC freely (power saving)
               case "${POWER_MODE}" in
                 10W)
                   GPU_FREQ=612000000;  GPU_GOV=powersave
-                  CPU_MAX=1190400;     CORES=4  ;;
+                  CPU_MAX=1190400;     CORES=4;  EMC_LOCK=false ;;
                 15W)
                   GPU_FREQ=612000000;  GPU_GOV=nvhost_podgov
-                  CPU_MAX=1420800;     CORES=4  ;;
+                  CPU_MAX=1420800;     CORES=4;  EMC_LOCK=false ;;
                 25W)
                   GPU_FREQ=408000000;  GPU_GOV=nvhost_podgov
-                  CPU_MAX=1497600;     CORES=8  ;;
+                  CPU_MAX=1497600;     CORES=8;  EMC_LOCK=false ;;
                 MAXN)
                   GPU_FREQ=918000000;  GPU_GOV=performance
-                  CPU_MAX=1984000;     CORES=8  ;;
+                  CPU_MAX=1984000;     CORES=8;  EMC_LOCK=true  ;;
                 MAXN_SUPER)
                   # ALLOW_MAXN_SUPER=true was set — user accepts risk
                   GPU_FREQ=1173000000; GPU_GOV=performance
-                  CPU_MAX=1984000;     CORES=8  ;;
+                  CPU_MAX=1984000;     CORES=8;  EMC_LOCK=true  ;;
                 *)
                   echo "[power-mode] Unknown POWER_MODE=${POWER_MODE}, defaulting to MAXN"
                   GPU_FREQ=918000000;  GPU_GOV=performance
-                  CPU_MAX=1984000;     CORES=8  ;;
+                  CPU_MAX=1984000;     CORES=8;  EMC_LOCK=true  ;;
               esac
 
-              echo "[power-mode] GPU freq=${GPU_FREQ} Hz, governor=${GPU_GOV}"
+              echo "[power-mode] GPU freq=${GPU_FREQ} Hz, governor=${GPU_GOV}, EMC lock=${EMC_LOCK}"
               echo "[power-mode] CPU max=${CPU_MAX} kHz, cores=${CORES}"
 
               EMC_CLK=/sys/kernel/debug/bpmp/debug/clk/emc
@@ -121,22 +124,27 @@ spec:
                   echo "[power-mode] ⚠ GPU devfreq not found at ${GPU_DEVFREQ}"
                 fi
 
-                # ── EMC (External Memory Controller): lock to max rate ──────
-                # Equivalent to jetson_clocks: write max rate, then set mrq_rate_locked=1.
-                # This pins LPDDR5 to 3199 MHz → full ~68 GB/s memory bandwidth.
-                # Without this, BPMP scales EMC to 2133 MHz at idle → ~33% BW loss
-                # → ~2-3 tok/s slower on 7b models (memory-bandwidth-bound inference).
-                # Note: min_rate write returns EINVAL; the correct BPMP API is:
-                #   1. echo <rate> > rate        (sets the target frequency)
-                #   2. echo 1 > mrq_rate_locked  (prevents BPMP from scaling it down)
-                if [ -f "${EMC_CLK}/rate" ] && [ -f "${EMC_CLK}/max_rate" ] && [ -f "${EMC_CLK}/mrq_rate_locked" ]; then
-                  EMC_MAX=$(cat "${EMC_CLK}/max_rate")
-                  echo "${EMC_MAX}" > "${EMC_CLK}/rate" 2>/dev/null && \
-                  echo 1            > "${EMC_CLK}/mrq_rate_locked" 2>/dev/null && \
-                    echo "[power-mode] EMC locked to ${EMC_MAX} Hz (max BW) ✓" || \
-                    echo "[power-mode] ⚠ EMC lock failed"
+                # ── EMC (External Memory Controller) ───────────────────────
+                # MAXN / MAXN_SUPER: lock to 3199 MHz (full ~68 GB/s LPDDR5 bandwidth)
+                # 10W / 15W / 25W:   release lock → BPMP scales EMC freely (power saving)
+                #
+                # BPMP API (min_rate write returns EINVAL — use rate + mrq_rate_locked):
+                #   lock:    echo <max_rate> > rate && echo 1 > mrq_rate_locked
+                #   unlock:  echo 0 > mrq_rate_locked  (BPMP resumes DVFS)
+                if [ -f "${EMC_CLK}/rate" ] && [ -f "${EMC_CLK}/mrq_rate_locked" ]; then
+                  if [ "${EMC_LOCK}" = "true" ]; then
+                    EMC_MAX=$(cat "${EMC_CLK}/max_rate")
+                    echo "${EMC_MAX}" > "${EMC_CLK}/rate" 2>/dev/null && \
+                    echo 1            > "${EMC_CLK}/mrq_rate_locked" 2>/dev/null && \
+                      echo "[power-mode] EMC locked to ${EMC_MAX} Hz (max BW) ✓" || \
+                      echo "[power-mode] ⚠ EMC lock failed"
+                  else
+                    echo 0 > "${EMC_CLK}/mrq_rate_locked" 2>/dev/null && \
+                      echo "[power-mode] EMC unlocked — BPMP manages frequency (power saving)" || \
+                      echo "[power-mode] ⚠ EMC unlock failed"
+                  fi
                 else
-                  echo "[power-mode] ⚠ EMC debugfs not found — bandwidth not locked"
+                  echo "[power-mode] ⚠ EMC debugfs not found"
                 fi
 
                 # ── CPU cores: hotplug ──────────────────────────────────────
@@ -181,10 +189,14 @@ spec:
                   echo "${GPU_FREQ}" > "${GPU_DEVFREQ}/min_freq" 2>/dev/null || true
                   echo "${GPU_GOV}"  > "${GPU_DEVFREQ}/governor"  2>/dev/null || true
                 fi
-                if [ -f "${EMC_CLK}/rate" ] && [ -f "${EMC_CLK}/max_rate" ]; then
-                  EMC_MAX=$(cat "${EMC_CLK}/max_rate")
-                  echo "${EMC_MAX}" > "${EMC_CLK}/rate" 2>/dev/null || true
-                  echo 1            > "${EMC_CLK}/mrq_rate_locked" 2>/dev/null || true
+                if [ -f "${EMC_CLK}/rate" ] && [ -f "${EMC_CLK}/mrq_rate_locked" ]; then
+                  if [ "${EMC_LOCK}" = "true" ]; then
+                    EMC_MAX=$(cat "${EMC_CLK}/max_rate")
+                    echo "${EMC_MAX}" > "${EMC_CLK}/rate" 2>/dev/null || true
+                    echo 1            > "${EMC_CLK}/mrq_rate_locked" 2>/dev/null || true
+                  else
+                    echo 0 > "${EMC_CLK}/mrq_rate_locked" 2>/dev/null || true
+                  fi
                 fi
                 for policy in $(ls -d ${CPU_BASE}/cpufreq/policy* 2>/dev/null); do
                   echo "performance" > "${policy}/scaling_governor" 2>/dev/null || true
