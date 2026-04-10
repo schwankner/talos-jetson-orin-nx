@@ -15,7 +15,7 @@ Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstu
 (Jetson Orin NX 16 GB). Verified result as of 2026-04-10:
 
 - GPU inference: **~30 tok/s** decode (qwen2.5:0.5b) / **~12 tok/s** (qwen2.5:7b) — all layers on CUDA, Ollama, Flash Attention enabled
-- ✅ All models that fit in memory work — qwen2.5:7b GPU crash (Bug 19) **fixed** in nvgpu 5.10.7
+- All models that fit in memory work — qwen2.5:0.5b, qwen2.5:7b etc.
 - Hardware syncpoint interrupts via `nvhost-ctrl-shim` — `cudaStreamSynchronize` uses interrupt-driven wait (no CPU polling)
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
 
@@ -245,10 +245,11 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 
 ### Verified performance (Orin NX 16 GB, MAXN mode, nvgpu 5.10.7)
 
-| Model | Quantization | GPU layers | Prompt eval | Decode |
-|-------|-------------|-----------|------------|--------|
-| qwen2.5:0.5b | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** |
-| qwen2.5:7b | Q4_K_M | 29/29 | ~200–270 tok/s | **~11–12 tok/s** |
+| Model | Size | Quantization | GPU layers | Prompt eval | Decode |
+|-------|------|-------------|-----------|------------|--------|
+| qwen2.5:0.5b | 397 MB | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** |
+| qwen2.5:7b | 4.7 GB | Q4_K_M | 29/29 | ~200–270 tok/s | **~11–12 tok/s** |
+| gemma4:e4b | 9.6 GB | — | all | ~160–275 tok/s | **~12 tok/s** |
 
 > **Note on large models (7B+)**: nvgpu 5.10.7 fixes the previous `CUDA error: unknown error`
 > crash for `qwen2.5:7b` and similar models. The root cause was a SYNCPT_WAITMEX timeout —
