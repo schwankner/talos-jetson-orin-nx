@@ -28,7 +28,7 @@ LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
 LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.10.5}"         # .../ 5.10.4 (fix: pkg.yaml pin b5678b2) / 5.10.5 (perf: pr_info→pr_debug, remove kernel-log overhead from SYNCPT_WAITMEX hot path)
+NVGPU_VERSION="${NVGPU_VERSION:-5.10.6}"         # .../ 5.10.5 (perf: pr_info→pr_debug, SYNCPT_WAITMEX hot path) / 5.10.6 (feat: POLL_FD_CREATE nr=16 via anon_inode_getfd, eliminates unknown ioctl 0x80084810)
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 
