@@ -102,6 +102,8 @@ spec:
               echo "[power-mode] GPU freq=${GPU_FREQ} Hz, governor=${GPU_GOV}"
               echo "[power-mode] CPU max=${CPU_MAX} kHz, cores=${CORES}"
 
+              EMC_CLK=/sys/kernel/debug/bpmp/debug/clk/emc
+
               apply_settings() {
                 # ── GPU: set freq cap BEFORE switching governor ─────────────
                 if [ -d "${GPU_DEVFREQ}" ]; then
@@ -119,6 +121,24 @@ spec:
                   echo "[power-mode] ⚠ GPU devfreq not found at ${GPU_DEVFREQ}"
                 fi
 
+                # ── EMC (External Memory Controller): lock to max rate ──────
+                # Equivalent to jetson_clocks: write max rate, then set mrq_rate_locked=1.
+                # This pins LPDDR5 to 3199 MHz → full ~68 GB/s memory bandwidth.
+                # Without this, BPMP scales EMC to 2133 MHz at idle → ~33% BW loss
+                # → ~2-3 tok/s slower on 7b models (memory-bandwidth-bound inference).
+                # Note: min_rate write returns EINVAL; the correct BPMP API is:
+                #   1. echo <rate> > rate        (sets the target frequency)
+                #   2. echo 1 > mrq_rate_locked  (prevents BPMP from scaling it down)
+                if [ -f "${EMC_CLK}/rate" ] && [ -f "${EMC_CLK}/max_rate" ] && [ -f "${EMC_CLK}/mrq_rate_locked" ]; then
+                  EMC_MAX=$(cat "${EMC_CLK}/max_rate")
+                  echo "${EMC_MAX}" > "${EMC_CLK}/rate" 2>/dev/null && \
+                  echo 1            > "${EMC_CLK}/mrq_rate_locked" 2>/dev/null && \
+                    echo "[power-mode] EMC locked to ${EMC_MAX} Hz (max BW) ✓" || \
+                    echo "[power-mode] ⚠ EMC lock failed"
+                else
+                  echo "[power-mode] ⚠ EMC debugfs not found — bandwidth not locked"
+                fi
+
                 # ── CPU cores: hotplug ──────────────────────────────────────
                 TOTAL=$(ls -d ${CPU_BASE}/cpu[0-9]* 2>/dev/null | wc -l)
                 i=0
@@ -132,20 +152,28 @@ spec:
                   i=$((i+1))
                 done
 
-                # ── CPU scaling_max_freq ────────────────────────────────────
+                # ── CPU governor + scaling_max_freq ────────────────────────
+                # MAXN sets scaling_max_freq but leaves governor as 'schedutil'
+                # → CPU idles at 268 MHz between tokens (thread wakeup latency).
+                # 'performance' pins all cores at max_freq → eliminates wakeup
+                # latency for the Ollama server thread and CUDA callback threads.
+                for policy in $(ls -d ${CPU_BASE}/cpufreq/policy* 2>/dev/null); do
+                  echo "performance" > "${policy}/scaling_governor" 2>/dev/null || true
+                done
                 for cpu in $(ls -d ${CPU_BASE}/cpu[0-9]* 2>/dev/null); do
                   MF="${cpu}/cpufreq/scaling_max_freq"
                   [ -f "${MF}" ] && echo "${CPU_MAX}" > "${MF}" 2>/dev/null || true
                 done
 
                 ONLINE=$(cat "${CPU_BASE}/online" 2>/dev/null || echo "?")
-                echo "[power-mode] CPUs online: ${ONLINE}"
+                CPU_GOV=$(cat "${CPU_BASE}/cpufreq/policy0/scaling_governor" 2>/dev/null || echo "?")
+                echo "[power-mode] CPUs online: ${ONLINE}, governor: ${CPU_GOV}"
               }
 
               apply_settings
               echo "[power-mode] Power mode ${POWER_MODE} applied ✓"
 
-              # Re-assert every 60s (governor may reset after suspend/resume)
+              # Re-assert every 60s (governor/EMC may reset after suspend/resume)
               while true; do
                 sleep 60
                 if [ -d "${GPU_DEVFREQ}" ]; then
@@ -153,6 +181,14 @@ spec:
                   echo "${GPU_FREQ}" > "${GPU_DEVFREQ}/min_freq" 2>/dev/null || true
                   echo "${GPU_GOV}"  > "${GPU_DEVFREQ}/governor"  2>/dev/null || true
                 fi
+                if [ -f "${EMC_CLK}/rate" ] && [ -f "${EMC_CLK}/max_rate" ]; then
+                  EMC_MAX=$(cat "${EMC_CLK}/max_rate")
+                  echo "${EMC_MAX}" > "${EMC_CLK}/rate" 2>/dev/null || true
+                  echo 1            > "${EMC_CLK}/mrq_rate_locked" 2>/dev/null || true
+                fi
+                for policy in $(ls -d ${CPU_BASE}/cpufreq/policy* 2>/dev/null); do
+                  echo "performance" > "${policy}/scaling_governor" 2>/dev/null || true
+                done
               done
 
           env:
@@ -176,7 +212,13 @@ spec:
           volumeMounts:
             - name: sys
               mountPath: /sys
+            - name: debugfs
+              mountPath: /sys/kernel/debug
       volumes:
         - name: sys
           hostPath:
             path: /sys
+        - name: debugfs
+          hostPath:
+            path: /sys/kernel/debug
+            type: Directory
