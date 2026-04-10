@@ -3,7 +3,7 @@
 [![Talos](https://img.shields.io/badge/Talos-v1.12.6-blue)](https://github.com/siderolabs/talos/releases/tag/v1.12.6)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35.0-blue)](https://kubernetes.io/)
 [![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
-[![nvgpu](https://img.shields.io/badge/nvgpu-5.9.5-green)](https://github.com/OE4T/linux-nvgpu)
+[![nvgpu](https://img.shields.io/badge/nvgpu-5.10.4-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 [![Build](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml)
 
@@ -14,7 +14,8 @@ Orin NX, Orin Nano) — all share the same T234 SoC, GA10B GPU, and UEFI boot pa
 Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html)**
 (Jetson Orin NX 16 GB). Verified result as of 2026-04-09:
 
-- GPU inference: **~7 tok/s** decode, **~110 tok/s** prefill (qwen2.5:0.5b, 25/25 layers on GPU, on Ollama, Flash Attention enabled)
+- GPU inference: **~16 tok/s** decode, **~1790 tok/s** prefill (qwen2.5:0.5b, 25/25 layers on GPU, Ollama, Flash Attention enabled)
+- Hardware syncpoint interrupts via `nvhost-ctrl-shim` — `cudaStreamSynchronize` uses interrupt-driven wait (no CPU polling)
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
 
 > ### ⚠️ CUDA Container Compatibility — Read Before You Start
@@ -120,10 +121,10 @@ download the `.raw` file manually.
 
 ```bash
 # macOS (replace rdiskN with your USB drive — check: diskutil list)
-sudo dd if=talos-usb-nvgpu5.9.5.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=talos-usb-nvgpu5.10.4.raw of=/dev/rdiskN bs=4m && sync
 
 # Linux (replace sdX with your USB drive — check: lsblk)
-sudo dd if=talos-usb-nvgpu5.9.5.raw of=/dev/sdX bs=4M status=progress && sync
+sudo dd if=talos-usb-nvgpu5.10.4.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
 > **Tip**: On macOS use `diskutil unmountDisk /dev/diskN` before flashing.
@@ -186,7 +187,7 @@ All scripts read from `scripts/common.sh`. Override per-run:
 | `REGISTRY_DOCKER` | `host.docker.internal:5001` | Registry as seen from inside Docker |
 | `TALOS_VERSION` | `v1.12.6` | Talos release |
 | `KERNEL_VERSION` | `6.18.18` | Kernel version |
-| `NVGPU_VERSION` | `5.9.5` | nvgpu extension version |
+| `NVGPU_VERSION` | `5.10.4` | nvgpu extension version |
 
 ---
 
@@ -206,10 +207,10 @@ make build-extensions
 make usb
 
 # 4. Flash to USB drive (macOS — replace rdiskN)
-sudo dd if=dist/talos-usb-nvgpu5.9.5.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=dist/talos-usb-nvgpu5.10.4.raw of=/dev/rdiskN bs=4m && sync
 
 # Linux:
-# sudo dd if=dist/talos-usb-nvgpu5.9.5.raw of=/dev/sdX bs=4M status=progress && sync
+# sudo dd if=dist/talos-usb-nvgpu5.10.4.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
 ---
@@ -229,8 +230,9 @@ Job 1: Build extensions   (ubuntu-24.04-arm, native ARM64)
    └── Cache miss → ~90 min, build kernel + nvgpu + extensions, push to ghcr.io
          │
          ▼  (needs: build-extensions)
-Job 2: Build USB image    (ubuntu-24.04-arm, native ARM64)
-   └── make usb → .raw → uploaded as artifact + GitHub Release
+Job 2: Build USB image + versioned installer   (ubuntu-24.04-arm, native ARM64)
+   ├── make usb → .raw → uploaded as artifact + GitHub Release
+   └── talos imager (kind: installer) → custom-installer:<talos>-<kernel>-nvgpu<ver> → ghcr.io
 ```
 
 Both jobs run on **native ARM64** (`ubuntu-24.04-arm`) — no QEMU, no cross-compilation.
@@ -238,7 +240,7 @@ Both jobs run on **native ARM64** (`ubuntu-24.04-arm`) — no QEMU, no cross-com
 ### Trigger a release
 
 ```bash
-git tag v1.12.6-nvgpu5.9.5
+git tag v1.12.6-nvgpu5.10.4
 git push --tags
 # → pipeline builds the image and creates a release with the .raw attached
 ```
@@ -328,9 +330,10 @@ patches to compile these against a standard upstream kernel.
 
 | Image | Tag | What's inside |
 |---|---|---|
-| `custom-installer` | `v1.12.6-6.18.18` | Official Talos installer + custom Clang vmlinuz |
-| `nvidia-tegra-nvgpu` | `5.9.5-6.18.18-talos` | `nvgpu.ko` (NVHOST=n) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
-| `kernel-modules-clang` | `1.1.0-6.18.18-talos` | Full Clang-compiled kernel module tree |
+| `custom-installer` | `v1.12.6-6.18.18` | Official Talos installer + custom Clang vmlinuz (base, no extensions) |
+| `custom-installer` | `v1.12.6-6.18.18-nvgpu5.10.4` | **Full installer with all extensions** — use this for `talosctl upgrade` |
+| `nvidia-tegra-nvgpu` | `5.10.4-6.18.18-talos` | `nvgpu.ko` (NVHOST=n) + `nvhost-ctrl-shim.ko` (SYNCPT_WAITMEX + GET_CHARACTERISTICS) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
+| `kernel-modules-clang` | `1.3.0-6.18.18-talos` | Full Clang-compiled kernel module tree |
 | `nvidia-firmware-ext` | `v5` | JetPack r36.5 firmware at `/usr/lib/firmware/ga10b/` incl. `pmu_pkc_prod_sig.bin` |
 
 ### Signing Key
@@ -350,11 +353,12 @@ Current committed key serial: `74FD747A092BD42575ED4CBE6F7E2479A6FEC740`
 
 ### Key Technical Challenges
 
-Getting GPU compute to work required solving 11 non-trivial problems. The full
+Getting GPU compute to work required solving 18 non-trivial problems. The full
 root-cause analysis (firmware ELOOP, signing key reproducibility, GCC 15/Clang 22
 toolchain mismatch, kernel 6.18 API changes, undefined L4T symbols, CUDA error 999,
 devfreq governor, CDI / containerd 2.x, UBSAN netlist bug, CI extension image
-distribution) is documented in **[BUGS.md](BUGS.md)**.
+distribution, nvhost-ctrl-shim ioctl implementation, USB boot masking NVMe upgrades,
+pkg.yaml source pin management) is documented in **[BUGS.md](BUGS.md)**.
 
 ---
 
@@ -369,7 +373,7 @@ distribution) is documented in **[BUGS.md](BUGS.md)**.
 | OE4T linux-nvgpu | `d530a48` | patches-r36.5 — the GA10B GPU driver |
 | OE4T linux-nv-oot | `ccf7646` | NVIDIA OOT framework (nvmap, conftest, devfreq) |
 | OE4T linux-hwpm | `4d8a699` | Hardware Performance Monitor |
-| `nvidia-tegra-nvgpu` ext | **5.9.5** | `NVHOST=n` (GPU semaphore sync, no host1x) + netlist UBSAN fix; stable CUDA |
+| `nvidia-tegra-nvgpu` ext | **5.10.4** | `NVHOST=n` + `nvhost-ctrl-shim` (SYNCPT_WAITMEX + GET_CHARACTERISTICS for `cudaStreamSynchronize`) |
 | `kernel-modules-clang` ext | **1.3.0** | Full Clang-compiled kernel module tree, signed with `talos_signing_key.pem` |
 | `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added; sourced from L4T r36.5 apt (`t234` repo) |
 
@@ -498,7 +502,10 @@ Notable items relevant to day-to-day use:
 |---|-------|--------|--------|
 | [Bug 6](BUGS.md#bug-6--cuda-error-999-cudastreamsynchronize--nvhost-syncpoint) | CUDA error 999 (`cudaStreamSynchronize`) | GPU compute fails | ✅ Fixed — `NVHOST=n` |
 | [Bug 14](BUGS.md#bug-14--cuda-error-999-persists-with-nvhosty-nvgpu-590--591) | CUDA error 999 with NVHOST=y (5.9.0/5.9.1) | GPU pool not signable | ✅ Diagnosed — NVHOST=n stable |
-| [Bug 15](BUGS.md#bug-15--gpu-decode-speed-7-toks-cpu-polling-overhead-with-nvhostn) | GPU decode ~7 tok/s (expected 20–30) | Slow inference | ❌ NVHOST=y blocked — L4T nvhost missing; NVHOST=n stable |
+| [Bug 15](BUGS.md#bug-15--gpu-decode-speed-7-toks-cpu-polling-overhead-with-nvhostn) | GPU decode ~7 tok/s (CPU polling) | Slow inference | ✅ Fixed — `nvhost-ctrl-shim` SYNCPT_WAITMEX (5.10.4) → **~16 tok/s** |
+| [Bug 16](BUGS.md) | Jetson boots from USB instead of NVMe after upgrade | `talosctl upgrade` silently ignored | ✅ Fixed — remove USB stick |
+| [Bug 17](BUGS.md) | nvhost-ctrl-shim missing SYNCPT_WAITMEX + GET_CHARACTERISTICS | CUDA error 999 with shim loaded | ✅ Fixed — implemented in nvhost_ctrl_shim.c (5.10.3) |
+| [Bug 18](BUGS.md) | pkg.yaml shim source pin not updated after code change | Old shim code shipped despite version bump | ✅ Fixed — pin `url`+`sha256`+`sha512` in pkg.yaml (5.10.4) |
 | [Bug 9](BUGS.md#bug-9--ubsan-array-index-out-of-bounds-in-netlistc-non-fatal) | UBSAN `netlist.c:617` at every boot | Log noise | ✅ Silenced (flexible array) |
 
 ---
