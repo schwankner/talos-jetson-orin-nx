@@ -708,18 +708,20 @@ archived here as documentation for future reference.
 | 5.10.3 | shim | SYNCPT_WAITMEX + GET_CHARACTERISTICS implemented — pkg.yaml pin NOT updated (still fetched old shim) | ❌ error 999 | — |
 | **5.10.4** | **shim** | **pkg.yaml pin updated to correct commit — interrupt-driven wait active** | **✅** | **~16 tok/s** |
 | **5.10.5** | **shim** | **pr_info → pr_debug in hot path (SYNCPT_WAITMEX fired 100s×/s → kernel log overhead removed)** | **✅** | **~23 tok/s** |
+| **5.10.6** | **shim** | **POLL_FD_CREATE (nr=16, 0x80084810) via anon_inode_getfd — eliminates unknown-ioctl warning** | **✅** | **~23 tok/s** |
 
 ### Resolution
 
 **Fixed in nvgpu 5.10.4 (2026-04-09).** Root cause was not the polling mechanism itself but a
 missing `/dev/nvhost-ctrl` device that CUDA 12.6 requires for hardware syncpoint waits.
 
-**Solution**: `nvhost-ctrl-shim` kernel module provides `/dev/nvhost-ctrl` with two critical ioctls:
+**Solution**: `nvhost-ctrl-shim` kernel module provides `/dev/nvhost-ctrl` with all required ioctls:
 
 | ioctl | nr | Code | Purpose |
 |-------|----|------|---------|
 | `NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS` | 14 | `0xc010480e` | Capability discovery — returns `num_syncpts=704` for Orin |
 | `NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX` | 9 | `0xc0204809` | Blocking wait via `dma_fence_wait_timeout()` — replaces CPU polling |
+| `NVHOST_IOCTL_CTRL_POLL_FD_CREATE` | 16 | `0x80084810` | anon_inode fd for GPU scaling event poll (5.10.6) |
 
 CUDA 12.6's `cudaStreamSynchronize` calls `GET_CHARACTERISTICS` once at init, then
 `SYNCPT_WAITMEX` per token during decode. With a real blocking wait (kernel dma_fence),
@@ -727,17 +729,20 @@ the CPU is released between tokens instead of spinning — eliminating the ~130 
 
 **Performance result**:
 
-| Metric | Before (CPU polling) | After (nvhost-ctrl-shim) |
-|--------|---------------------|--------------------------|
-| Decode | ~7 tok/s | ~16 tok/s (5.10.4) | **~23 tok/s (5.10.5)** |
-| Prefill | ~110 tok/s | ~1790 tok/s (5.10.4) | **~500 tok/s (5.10.5)** |
-| dmesg | `unknown ioctl 0xc0204809` | `SYNCPT_WAITMEX done` | `SYNCPT_WAITMEX done` (silent — pr_debug) |
+| Metric | Before (CPU polling) | 5.10.4 | 5.10.5 | 5.10.6 |
+|--------|---------------------|--------|--------|--------|
+| Decode | ~7 tok/s | ~16 tok/s | **~23 tok/s** | **~23 tok/s** |
+| Prefill | ~110 tok/s | ~1790 tok/s | **~500 tok/s** | **~500 tok/s** |
+| unknown ioctl | `0x80084810` present | present | present | **gone ✅** |
 
 **nvgpu 5.10.5 — pr_info → pr_debug**: Hot-path `pr_info` calls in SYNCPT_WAITMEX were firing
 hundreds of times per second during inference, flushing the kernel ring buffer and adding
 measurable per-token overhead. Changed to `pr_debug` (no-op unless CONFIG_DYNAMIC_DEBUG
-enables them) in 5.10.5. Result: **+7 tok/s** (16 → 23 tok/s). Debug logging can be
-re-enabled at runtime:
+enables them) in 5.10.5. Result: **+7 tok/s** (16 → 23 tok/s).
+
+**nvgpu 5.10.6 — POLL_FD_CREATE**: `gk20a_scale_init` calls ioctl nr=16 (`0x80084810`) once
+during GPU frequency-scaling setup. Previously returned ENOTTY. Now returns a real anonymous
+inode fd via `anon_inode_getfd()`. Was NOT the cause of Bug 19 (7b crash). Debug logging:
 ```
 echo "file nvhost_ctrl_shim.c +p" > /sys/kernel/debug/dynamic_debug/control
 ```
@@ -900,30 +905,55 @@ All 29 layers load to GPU successfully (4168 MiB model + 448 MiB KV + 311 MiB co
 The crash occurs at the very first `GET_ROWS` op (embedding lookup), before any decode.
 
 **Discovery**: 2026-04-10.
+**Fixed**: 2026-04-10 (nvgpu 5.10.7 + ollama/ollama:0.20.5).
 
-**Models affected**:
+**Models affected / fixed**:
 
-| Model | Hidden dim | GPU | CPU fallback |
-|-------|-----------|-----|--------------|
-| qwen2.5:0.5b | 896 | ✅ ~23 tok/s | — |
-| qwen2.5:1.5b | 1536 | ✅ ~18 tok/s | — |
-| **qwen2.5:7b** | **3584** | **❌ crash** | 5.9 tok/s |
+| Model | Hidden dim | nvgpu 5.10.6 | nvgpu 5.10.7 + ollama/ollama:0.20.5 |
+|-------|-----------|--------------|--------------------------------------|
+| qwen2.5:0.5b | 896 | ✅ ~23 tok/s (dustynv) | ✅ ~30 tok/s |
+| qwen2.5:1.5b | 1536 | ✅ ~18 tok/s | ✅ (not re-tested) |
+| **qwen2.5:7b** | **3584** | **❌ crash** | **✅ ~11–12 tok/s** |
 
-**Root cause hypothesis**: The `GET_ROWS` CUDA kernel for Q4_K_M dequantization uses shared
-memory proportional to the hidden dimension. The GA10B (compute capability 8.7) on Jetson
-Orin NX has more limited per-SM resources than desktop GPUs. With hidden dim = 3584, the
-kernel likely exceeds the shared memory budget per thread block on GA10B.
+**Root cause (revised 2026-04-10)**:
+The `GET_ROWS` CUDA kernel failure was a **secondary symptom**, not the root cause.
+The real cause was **SYNCPT_WAITMEX timeout**: CUDA passes a finite timeout (e.g. 5000 ms)
+to `NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX`. The nvhost-ctrl-shim previously passed this value
+directly to `wait_event_interruptible_timeout()`. For large models (qwen2.5:7b, hidden_dim=3584),
+the first GPU kernel (embedding GET_ROWS) takes longer than CUDA's timeout on GA10B, causing
+the wait to expire. The kernel never signals the syncpoint → CUDA returns `error: unknown
+error` → `ggml_backend_cuda_synchronize` fails → llama-server exits with status 2.
 
-Number of Q4_K_M blocks per row scales with hidden dim:
-- 0.5b: 896 / 256 = 3.5 blocks → works
-- 1.5b: 1536 / 256 = 6 blocks → works
-- 7b: 3584 / 256 = 14 blocks → FAILS
+**Causal chain**:
+```
+CUDA passes timeout=5000ms to SYNCPT_WAITMEX
+→ wait expires before GA10B signals syncpoint (large model warmup)
+→ cudaStreamSynchronize returns "CUDA error: unknown error"
+→ ggml_backend_cuda_synchronize aborts
+→ llama runner terminated (exit status 2)
+```
 
-**Status**: ❌ Open — workarounds under investigation.
+**Fix (nvgpu 5.10.7)**:
+`nvhost-ctrl-shim` now enforces a minimum 30-second floor on all CUDA-supplied timeouts:
+```c
+unsigned int timeout_ms = max_t(unsigned int, (unsigned int)args.timeout, 30000U);
+timeout_jiffies = msecs_to_jiffies(timeout_ms);
+```
+This gives the GA10B enough time to complete warmup computations for large models.
+Timeout warnings now log the CUDA-supplied value:
+```
+nvhost-ctrl-shim: SYNCPT_WAITMEX timeout id=X thresh=Y (cuda_timeout=Zms)
+```
 
-**Possible fixes to try**:
-1. Pull `qwen2.5:7b-q8_0` or `qwen2.5:7b` in F16 (different kernel path)
-2. Set `GGML_CUDA_DMMV_X` env var to reduce block size
-3. Use partial GPU offload (`num_gpu < 29`) to avoid the large embedding on GPU
-4. Investigate if unknown ioctl nr=16 (`0x80084810`) is needed for larger CUDA workloads
+**Also required**: `ollama/ollama:0.20.5` with `JETSON_JETPACK=6` env var activates the
+`cuda_jetpack6/libggml-cuda.so` backend (GA10B compute capability 8.7 tuned).
+`dustynv/ollama` images also work but are outdated (can't load newer Ollama models).
+
+**Results (nvgpu 5.10.7 + ollama/ollama:0.20.5)**:
+- `qwen2.5:0.5b`: ~30 tok/s eval ✅
+- `qwen2.5:7b`: ~11–12 tok/s eval ✅ (9 sec first token, 191 tok/s prompt eval)
+- No SYNCPT_WAITMEX timeout warnings during successful inference
+- `SYNCPT_WAITMEX wait error: -512` (ERESTARTSYS) is normal — CUDA retries signal-interrupted waits
+
+**Status**: ✅ **FIXED** in nvgpu 5.10.7 + ollama/ollama:0.20.5
 
