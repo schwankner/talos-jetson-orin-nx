@@ -17,9 +17,6 @@
 #      when a pod requests nvidia.com/gpu.  The spec is generated dynamically
 #      so it only lists device nodes that actually exist on this host.
 #
-# Replaces (can be deleted after deploying this):
-#   manifests/ollama/gpu-libs-restore.yaml
-#   The initContainer in manifests/ollama/ollama-deployment.yaml
 #
 # Apply:
 #   kubectl apply -f manifests/gpu/cdi-setup.yaml

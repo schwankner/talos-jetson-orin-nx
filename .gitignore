@@ -64,3 +64,13 @@ scripts/setup-cdi.sh
 # ── Intermediate imager output directories ────────────────────────────────────
 imager-out-v*/
 controlplane.yaml
+
+# ── Source trees cloned at build time (not committed) ─────────────────────────
+linux-nv-oot/
+linux-nvgpu/
+kernel-modules-clang/
+
+# ── Build artifacts / cache files ─────────────────────────────────────────────
+*.tar.gz
+*.raw
+*.raw.zst

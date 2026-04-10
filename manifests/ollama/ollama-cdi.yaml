@@ -1,8 +1,7 @@
 ---
 # Ollama deployment — CDI-based GPU access (OOB, no manual lib mounts required)
 #
-# This manifest is the CDI successor to ollama-deployment.yaml.  It relies on
-# the Container Device Interface stack set up by:
+# This manifest relies on the Container Device Interface stack set up by:
 #
 #   manifests/gpu/cdi-setup.yaml      — writes /var/run/cdi/nvidia-jetson.yaml
 #   manifests/gpu/device-plugin.yaml  — exposes nvidia.com/gpu resource
@@ -17,16 +16,12 @@
 #        • LD_LIBRARY_PATH pointing at the JetPack r36.5 libs
 #   4. Ollama starts — CUDA init finds real libs and GPU devices; no extra steps needed
 #
-# Compared to ollama-deployment.yaml this manifest has:
-#   ✓  No initContainer (firmware + symlink handled by nvidia-cdi-setup DaemonSet)
+# CDI advantages over traditional hostPath approaches:
+#   ✓  No initContainer needed (firmware + symlink handled by nvidia-cdi-setup DaemonSet)
 #   ✓  No hostPath volume for /dev
 #   ✓  No hostPath volume for JetPack libs
 #   ✓  No manually set LD_LIBRARY_PATH
 #   ✓  No securityContext.privileged (verified 2026-04-10: GPU works without it)
-#
-# Upgrade path:
-#   kubectl delete -f manifests/ollama/ollama-deployment.yaml
-#   kubectl apply  -f manifests/ollama/ollama-cdi.yaml
 ---
 apiVersion: v1
 kind: Namespace
