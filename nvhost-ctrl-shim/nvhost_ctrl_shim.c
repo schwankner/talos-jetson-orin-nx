@@ -23,6 +23,7 @@
 //   NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX       (9)  → dma_fence_wait_timeout() [interrupt-driven]
 //   NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE    (11) → host1x_fence_create() → sync_file fd
 //   NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS  (14) → return Orin hw syncpt info
+//   NVHOST_IOCTL_CTRL_POLL_FD_CREATE       (16) → anon_inode fd for syncpt event polling
 //   NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT    (19) → sync_file fd → host1x_fence_extract()
 //
 // Targets kernel 6.18 (Talos v1.12.6):
@@ -34,9 +35,11 @@
 //   1. open(/dev/nvhost-ctrl)
 //   2. GET_CHARACTERISTICS (nr=14): discover num_syncpts=704 etc.
 //   3. SYNCPT_WAITMEX (nr=9): blocking wait for syncpt id/thresh → interrupt-driven
+//   4. POLL_FD_CREATE (nr=16): once at GPU scaling init — creates anonymous poll fd
 //   Note: SYNC_FENCE_CREATE (nr=11) is NOT called by CUDA 12.6 directly but kept
 //         for other potential callers (e.g. media codecs, test tools).
 
+#include <linux/anon_inodes.h>
 #include <linux/cdev.h>
 #include <linux/delay.h>
 #include <linux/dma-fence-array.h>
@@ -48,6 +51,7 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/poll.h>
 #include <linux/slab.h>
 #include <linux/sync_file.h>
 #include <linux/uaccess.h>
@@ -112,6 +116,16 @@ struct nvhost_ctrl_get_characteristics {
 	__u64 nvhost_characteristics_buf_addr;
 };
 
+// nr=16: POLL_FD_CREATE — creates an anonymous fd for syncpoint event polling.
+// Called once by gk20a_scale_init during GPU frequency-scaling setup.
+// The fd is used with poll()/epoll() to wait for syncpoint threshold events.
+// Our implementation returns a real anonymous inode fd so callers get a valid
+// file descriptor without ENOTTY; the fd is pollable (returns POLLHUP on close).
+struct nvhost_ctrl_poll_fd_create_args {
+	__s32 fd;      /* out: anonymous poll fd */
+	__u32 padding;
+};
+
 // nr=19: SYNC_FILE_EXTRACT
 struct nvhost_ctrl_sync_file_extract {
 	__s32 fd;
@@ -133,6 +147,8 @@ struct nvhost_ctrl_sync_file_extract {
 	_IOWR(NVHOST_IOCTL_MAGIC, 11, struct nvhost_ctrl_sync_fence_create_args)
 #define NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS \
 	_IOWR(NVHOST_IOCTL_MAGIC, 14, struct nvhost_ctrl_get_characteristics)
+#define NVHOST_IOCTL_CTRL_POLL_FD_CREATE \
+	_IOR(NVHOST_IOCTL_MAGIC, 16, struct nvhost_ctrl_poll_fd_create_args)
 #define NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT \
 	_IOWR(NVHOST_IOCTL_MAGIC, 19, struct nvhost_ctrl_sync_file_extract)
 
@@ -325,6 +341,49 @@ static int ioctl_get_characteristics(void __user *data)
 
 	req.nvhost_characteristics_buf_size = sizeof(chars);
 	return copy_to_user(data, &req, sizeof(req)) ? -EFAULT : 0;
+}
+
+// ── NVHOST_IOCTL_CTRL_POLL_FD_CREATE ─────────────────────────────────────────
+// Creates an anonymous inode fd for syncpoint event polling.
+// Called once by gk20a_scale_init (GPU frequency scaling); NOT in the CUDA
+// inference hot-path. Returns a real pollable fd so callers can select()/epoll()
+// without getting ENOTTY. The fd is a minimal anon inode — it does not deliver
+// syncpoint threshold events, but it is a valid open file descriptor.
+
+static __poll_t nvhost_ctrl_poll_fd_poll(struct file *file, poll_table *wait)
+{
+	/* Never signals readiness — callers use SYNCPT_WAITMEX for real waits */
+	return 0;
+}
+
+static const struct file_operations nvhost_ctrl_poll_fops = {
+	.owner = THIS_MODULE,
+	.poll  = nvhost_ctrl_poll_fd_poll,
+};
+
+static int ioctl_poll_fd_create(void __user *data)
+{
+	struct nvhost_ctrl_poll_fd_create_args args;
+	int fd;
+
+	fd = anon_inode_getfd("nvhost-ctrl-poll", &nvhost_ctrl_poll_fops,
+			      NULL, O_RDWR | O_CLOEXEC);
+	if (fd < 0) {
+		pr_err("nvhost-ctrl-shim: POLL_FD_CREATE: anon_inode_getfd failed: %d\n",
+		       fd);
+		return fd;
+	}
+
+	args.fd = fd;
+	args.padding = 0;
+
+	if (copy_to_user(data, &args, sizeof(args))) {
+		close_fd(fd);
+		return -EFAULT;
+	}
+
+	pr_debug("nvhost-ctrl-shim: POLL_FD_CREATE → fd=%d\n", fd);
+	return 0;
 }
 
 // ── NVHOST_IOCTL_CTRL_SYNC_FENCE_CREATE ──────────────────────────────────────
@@ -557,6 +616,8 @@ static long nvhost_ctrl_ioctl(struct file *file, unsigned int cmd,
 		return ioctl_sync_fence_create(host1x, data);
 	case NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS:
 		return ioctl_get_characteristics(data);
+	case NVHOST_IOCTL_CTRL_POLL_FD_CREATE:
+		return ioctl_poll_fd_create(data);
 	case NVHOST_IOCTL_CTRL_SYNC_FILE_EXTRACT:
 		return ioctl_sync_file_extract(host1x, data);
 	default:
