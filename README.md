@@ -363,6 +363,7 @@ If the variable is missing, Ollama logs: `"jetpack not detected (set JETSON_JETP
 | `JETSON_JETPACK` | `6` | Activates `cuda_jetpack6` CUDA backend — **required** |
 | `OLLAMA_FLASH_ATTENTION` | `1` | Enables Flash Attention (significant speedup) |
 | `OLLAMA_NUM_PARALLEL` | `1` | Single parallel request — avoids wasted KV cache |
+| `OLLAMA_KV_CACHE_TYPE` | `q8_0` | KV cache quantization — halves KV cache bandwidth |
 | `LD_LIBRARY_PATH` | see below | Ensures `libcuda.so.1` from JetPack is found |
 
 ```
@@ -379,11 +380,16 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 > This also means **higher GPU clocks provide no benefit**: tested at MAXN_SUPER (1,173 MHz
 > vs. MAXN's 918 MHz), decode throughput stays at ~11–12 tok/s — the GPU never reaches its
 > compute ceiling because it is always waiting for memory, not crunching numbers.
+>
+> **Clock configuration matters**: EMC (memory controller) must be locked to 3199 MHz and
+> CPU governor set to `performance`. Without this, BPMP scales EMC to 2133 MHz at idle
+> and the CPU idles at 268 MHz between tokens — costing up to 50% prompt eval throughput
+> and doubling first-token latency for small models.
 
 | Model | Size | Quantization | GPU layers | Prompt eval | Decode (GPU) | Decode (CPU fallback) |
 |-------|------|-------------|-----------|------------|-------------|----------------------|
-| qwen2.5:0.5b | 397 MB | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** | ~39 tok/s¹ |
-| qwen2.5:7b | 4.7 GB | Q4_K_M | 29/29 | ~200–270 tok/s | **~11–12 tok/s** | ~5.6 tok/s |
+| qwen2.5:0.5b | 397 MB | Q4_K_M | 28/28 | ~1100 tok/s | **~60 tok/s** | ~39 tok/s¹ |
+| qwen2.5:7b | 4.7 GB | Q4_K_M | 29/29 | ~425 tok/s | **~11–12 tok/s** | ~5.6 tok/s |
 | gemma4:e4b | 9.6 GB | — | all | ~160–275 tok/s | **~12 tok/s** | n/a (OOM) |
 | qwen3.5:9b ²| ~5.5 GB | Q4_K_M | all | ~63 tok/s | **~7.7 tok/s** | n/a |
 | ministral-3:14b | ~8 GB | Q4_K_M | all | ~197 tok/s | **~6.8 tok/s** | n/a |
