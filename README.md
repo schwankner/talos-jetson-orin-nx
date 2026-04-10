@@ -385,19 +385,24 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 | qwen2.5:0.5b | 397 MB | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** | ~39 tok/s¹ |
 | qwen2.5:7b | 4.7 GB | Q4_K_M | 29/29 | ~200–270 tok/s | **~11–12 tok/s** | ~5.6 tok/s |
 | gemma4:e4b | 9.6 GB | — | all | ~160–275 tok/s | **~12 tok/s** | n/a (OOM) |
+| qwen3.5:9b ²| ~5.5 GB | Q4_K_M | all | ~63 tok/s | **~7.7 tok/s** | n/a |
+| ministral-3:14b | ~8 GB | Q4_K_M | all | ~197 tok/s | **~6.8 tok/s** | n/a |
 
 > ¹ qwen2.5:0.5b is small enough to benefit from CPU cache locality — ARM Cortex-A78AE at this
 > model size is competitive with GPU. The GPU advantage grows substantially with model size:
 > at 7B, GPU is **2.1× faster** than CPU-only. At 9.6 GB (gemma4:e4b), the model doesn't fit
 > in memory without the GPU's UMA access pattern and causes OOM on CPU.
 >
-> **Memory bandwidth ceiling**: qwen2.5:7b (4.7 GB) and gemma4:e4b (9.6 GB) both decode at
-> ~12 tok/s despite their size difference. This is expected: the GA10B has ~68 GB/s of LPDDR5
-> memory bandwidth, and token decoding is purely memory-bound (one full model read per token).
-> Both models hit the same DRAM throughput ceiling — throwing a larger model at the GPU does
-> not reduce decode speed further, but it also cannot be accelerated beyond this hardware limit.
-> The only practical lever is quantization: lower bit-width means fewer bytes per weight per
-> token, which translates directly to higher decode throughput.
+> ² qwen3.5:9b is a reasoning (thinking) model — it generates an internal chain-of-thought trace
+> before the final answer. The decode rate reflects raw hardware throughput; a single response
+> may produce 5,000+ tokens of reasoning, so wall-clock time per query is much higher than the
+> tok/s figure suggests. Use `/no_think` in the prompt to disable thinking mode if not needed.
+>
+> **Memory bandwidth ceiling**: all models above 1 GB decode at 6–12 tok/s despite their size
+> differences. This is expected: the GA10B has ~68 GB/s of LPDDR5 memory bandwidth, and token
+> decoding is purely memory-bound (one full model read per token). The only practical lever is
+> quantization: lower bit-width means fewer bytes per weight per token, which translates directly
+> to higher decode throughput.
 
 **The common failure mode** on Jetson is Ollama silently falling back to CPU because the GPU
 stack isn't set up correctly (no device plugin, no CDI spec, missing `JETSON_JETPACK=6`). This
