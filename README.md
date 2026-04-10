@@ -381,6 +381,27 @@ image solves that — the GPU is guaranteed to be detected and used.
 > large embedding tables. The shim now enforces a 30-second minimum floor. See
 > [BUGS.md — Bug 19](BUGS.md) for the full analysis.
 
+### Expected post-boot warnings (not errors)
+
+After every reboot, `talosctl dmesg` shows a burst of warnings for ~2 minutes. These are
+**normal and self-resolving** — do not investigate unless the node stays `NotReady` after 5 minutes.
+
+| Warning | Cause | Resolves when |
+|---------|-------|---------------|
+| `kubelet client certificate does not match any accepted CAs` | Jetson RTC has no backup battery — boots at Unix epoch 0, cert was issued in 2026 | NTP jump (~1 s after network) |
+| `k8s.NodeApplyController: timeout` | kube-apiserver not yet accepting connections | API server ready (~40 s) |
+| `k8s.ManifestApplyController: EOF` | Same — connection dropped before API server ready | API server ready |
+| `Authorization error (user=apiserver-kubelet-client)` | RBAC not yet applied (controller-manager restarting) | controller-manager stable (~90 s) |
+| `cpufreq: cpu0,cur:…,set:…` | CPU frequency governor adjusting after boot | Immediate, cosmetic |
+
+`kube-controller-manager` and `kube-scheduler` restart 3–4 times during this window — expected.
+The node reaches `Ready` within 2–3 minutes on a healthy boot.
+
+```bash
+# Wait for Ready (exits when node is healthy):
+kubectl --kubeconfig ./kubeconfig wait node --all --for=condition=Ready --timeout=5m
+```
+
 ### Debug GPU detection
 
 ```bash
