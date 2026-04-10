@@ -33,7 +33,7 @@ Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstu
 > the same restriction. No Jetson setup — official or custom — can run arbitrary CUDA images.
 >
 > **What works ✅**
-> - `ollama/ollama:0.20.5` — **recommended** (official Ollama, GA10B-tuned `cuda_jetpack6` backend, requires `JETSON_JETPACK=6` env var — see [§8](#8-llm-inference-with-ollama))
+> - `ollama/ollama:0.20.5` — **recommended** (official Ollama, GA10B-tuned `cuda_jetpack6` backend, requires `JETSON_JETPACK=6` env var — see [§2](#2-llm-inference-with-ollama))
 > - `nvcr.io/nvidia/l4t-cuda:*` — NVIDIA's official L4T CUDA base images
 > - [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers) — community Jetson image collection (PyTorch, TensorRT, etc.)
 > - Any image built `FROM nvcr.io/nvidia/l4t-*` or explicitly targeting Tegra/L4T
@@ -83,14 +83,14 @@ reComputer J4012 which provides NVMe, 2× GbE, and a standard UART TCU connector
 ## Table of Contents
 
 1. [Installation](#1-installation)
-2. [Build Prerequisites](#2-build-prerequisites)
-3. [Local Build & Flash](#3-local-build--flash)
-4. [GitHub Actions Pipeline](#4-github-actions-pipeline)
-5. [Build Pipeline Details](#5-build-pipeline-details)
-6. [Component Versions](#6-component-versions)
-7. [GPU Verification](#7-gpu-verification)
-8. [LLM Inference with Ollama](#8-llm-inference-with-ollama)
-9. [GPU Power Modes](#9-gpu-power-modes)
+2. [LLM Inference with Ollama](#2-llm-inference-with-ollama)
+3. [GPU Verification](#3-gpu-verification)
+4. [GPU Power Modes](#4-gpu-power-modes)
+5. [Build Prerequisites](#5-build-prerequisites)
+6. [Local Build & Flash](#6-local-build--flash)
+7. [GitHub Actions Pipeline](#7-github-actions-pipeline)
+8. [Build Pipeline Details](#8-build-pipeline-details)
+9. [Component Versions](#9-component-versions)
 10. [Known Bugs and Limitations](#10-known-bugs-and-limitations)
 11. [Known Limitations](#11-known-limitations)
 12. [Contributing](#12-contributing)
@@ -100,11 +100,13 @@ reComputer J4012 which provides NVMe, 2× GbE, and a standard UART TCU connector
 
 ## 1. Installation
 
+### Option A — Fresh Install (USB)
+
 No build environment needed. Download the pre-built USB image from the
 [latest release](https://github.com/schwankner/talos-jetson-orin-nx/releases/latest),
 flash it to a USB drive and boot.
 
-### Download
+#### Download
 
 ```bash
 # Find the latest release URL
@@ -117,7 +119,7 @@ curl -L -O "${LATEST}"
 Or go to **[Releases](https://github.com/schwankner/talos-jetson-orin-nx/releases)** and
 download the `.raw` file manually.
 
-### Flash
+#### Flash
 
 ```bash
 # macOS (replace rdiskN with your USB drive — check: diskutil list)
@@ -129,7 +131,7 @@ sudo dd if=talos-usb-nvgpu5.10.7.raw of=/dev/sdX bs=4M status=progress && sync
 
 > **Tip**: On macOS use `diskutil unmountDisk /dev/diskN` before flashing.
 
-### Prerequisites
+#### Prerequisites
 
 > ⚠️ **JetPack 6.2 (L4T r36.5) must be flashed to the Jetson before booting this image.**
 >
@@ -138,10 +140,10 @@ sudo dd if=talos-usb-nvgpu5.10.7.raw of=/dev/sdX bs=4M status=progress && sync
 >
 > Flash JetPack 6.2 using [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager) **before** proceeding.
 
-### Boot & Install
+#### Boot & Install
 
 1. Plug the USB drive into the Jetson.
-2. Enter the **UEFI boot menu** (press **Escape** during POST / on the UART splash screen).
+2. Enter the **UEFI boot menu** (press **F11** during POST / on the UART splash screen).
 3. Select **Boot Manager → USB drive** and confirm.
 4. Talos boots into **maintenance mode** (no STATE partition found on NVMe yet).
 5. Apply your machine config:
@@ -158,7 +160,233 @@ sudo dd if=talos-usb-nvgpu5.10.7.raw of=/dev/sdX bs=4M status=progress && sync
 
 ---
 
-## 2. Build Prerequisites
+### Option B — Upgrade from an Existing Talos Installation
+
+If you already have any Talos version running on a Jetson Orin NX, you can switch to this
+custom image **without USB** using `talosctl upgrade`. No data is lost — `--preserve` keeps
+your machine config, etcd state, and Kubernetes workloads intact.
+
+#### Prerequisites
+
+- JetPack 6.2 (L4T r36.5) must have been flashed at some point — the GPU firmware it writes
+  to the Jetson's eMMC persists across Talos upgrades.
+- `talosctl` v1.12.x and a working `talosconfig` for the node.
+
+#### Upgrade command
+
+```bash
+talosctl upgrade \
+  --nodes <jetson-ip> \
+  --talosconfig ./talosconfig \
+  --image ghcr.io/schwankner/custom-installer:v1.12.6-6.18.18-nvgpu5.10.7 \
+  --preserve
+```
+
+The installer image is publicly available on `ghcr.io` — no registry credentials needed.
+
+#### What happens
+
+1. Talos downloads the installer image from `ghcr.io`.
+2. The node reboots into the installer, which writes the new system partition.
+3. On the next boot, Talos v1.12.6 starts with the custom kernel (6.18.18-talos), nvgpu
+   5.10.7 extension, and nvhost-ctrl-shim — CUDA is available immediately.
+4. Your machine config, etcd data, and workloads are preserved.
+
+> **Note**: the node will be unavailable for ~2–3 minutes during the upgrade reboot.
+> Monitor with `talosctl health --nodes <ip> --talosconfig ./talosconfig`.
+
+---
+
+## 2. LLM Inference with Ollama
+
+### Recommended Image: `ollama/ollama`
+
+The **official `ollama/ollama`** image is the recommended way to run LLM inference on this setup.
+Starting with Ollama 0.6.x, the image ships a `cuda_jetpack6/libggml-cuda.so` backend that is
+specifically tuned for the GA10B GPU (compute capability 8.7) on Jetson Orin — it is compiled
+with `CMAKE_CUDA_ARCHITECTURES=87` and handles the Tegra UMA memory model correctly.
+
+> **Why not `dustynv/ollama`?**
+> The [`dustynv/ollama`](https://hub.docker.com/r/dustynv/ollama) image (from
+> [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers)) was the standard
+> recommendation for Jetson CUDA workloads for a long time, but **has not been updated since
+> July 7, 2025**. It is missing all Ollama improvements from the past year (newer model support,
+> quantization fixes, performance improvements) and cannot load many modern models at all.
+> Use `ollama/ollama` instead.
+
+### Critical: `JETSON_JETPACK=6` env var
+
+Without this environment variable, `ollama/ollama` silently falls back to **CPU-only mode**:
+
+```
+# Without JETSON_JETPACK=6 — CPU only (wrong):
+time=... level=INFO msg="inference compute" library=cpu
+
+# With JETSON_JETPACK=6 — GPU (correct):
+time=... level=INFO msg="inference compute" library=CUDA compute=8.7 name=CUDA0 \
+  description=Orin driver=12.6 total="15.2 GiB"
+```
+
+Ollama detects the JetPack version via this variable and loads `cuda_jetpack6/libggml-cuda.so`.
+If the variable is missing, Ollama logs: `"jetpack not detected (set JETSON_JETPACK or OLLAMA_LLM_LIBRARY to override)"`.
+
+### Required environment variables
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `JETSON_JETPACK` | `6` | Activates `cuda_jetpack6` CUDA backend — **required** |
+| `OLLAMA_FLASH_ATTENTION` | `1` | Enables Flash Attention (significant speedup) |
+| `OLLAMA_NUM_PARALLEL` | `1` | Single parallel request — avoids wasted KV cache |
+| `LD_LIBRARY_PATH` | see below | Ensures `libcuda.so.1` from JetPack is found |
+
+```
+LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local/cuda/lib64:/usr/lib/ollama/cuda_jetpack6
+```
+
+### Verified performance (Orin NX 16 GB, MAXN mode, nvgpu 5.10.7)
+
+| Model | Quantization | GPU layers | Prompt eval | Decode |
+|-------|-------------|-----------|------------|--------|
+| qwen2.5:0.5b | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** |
+| qwen2.5:7b | Q4_K_M | 29/29 | ~200–270 tok/s | **~11–12 tok/s** |
+
+> **Note on large models (7B+)**: nvgpu 5.10.7 fixes the previous `CUDA error: unknown error`
+> crash for `qwen2.5:7b` and similar models. The root cause was a SYNCPT_WAITMEX timeout —
+> CUDA passed a ~5s deadline to the kernel wait, which the GA10B exhausted during warmup for
+> large embedding tables. The shim now enforces a 30-second minimum floor. See
+> [BUGS.md — Bug 19](BUGS.md) for the full analysis.
+
+### Debug GPU detection
+
+```bash
+# Check shim on the node
+talosctl -n <node-ip> dmesg | grep nvhost-ctrl-shim
+
+# Enable verbose ioctl logging (requires privileged pod):
+echo "file nvhost_ctrl_shim.c +p" > /sys/kernel/debug/dynamic_debug/control
+```
+
+---
+
+## 3. GPU Verification
+
+### Check module loaded + devfreq governor active
+
+```bash
+talosctl -n <node-ip> dmesg | grep -E "nvgpu|ga10b|podgov|devfreq"
+# Expected: nvgpu probe, ga10b firmware loaded
+
+talosctl -n <node-ip> read /sys/bus/platform/devices/17000000.gpu/devfreq/17000000.gpu/governor
+# performance  (after power-mode DaemonSet)
+
+talosctl -n <node-ip> read /sys/bus/platform/devices/17000000.gpu/devfreq/17000000.gpu/cur_freq
+# 918000000  (918 MHz in MAXN mode)
+```
+
+### Check nvhost-ctrl-shim loaded
+
+```bash
+talosctl -n <node-ip> dmesg | grep nvhost-ctrl-shim
+# Expected: nvhost-ctrl-shim: /dev/nvhost-ctrl ready (major 505)
+```
+
+### Run a CUDA device check in a pod
+
+```bash
+kubectl run cuda-check \
+  --image=ghcr.io/schwankner/cuda-device-check:v1 \
+  --restart=Never --rm -it \
+  --overrides='{"spec":{"resources":{"limits":{"nvidia.com/gpu":"1"}}}}'
+```
+
+Expected output:
+
+```
+cuInit=0 name=CUDA_SUCCESS
+Device count: 1
+GPU 0: Orin  SM 8.7  15.3 GiB
+```
+
+---
+
+## 4. GPU Power Modes
+
+> ### ⚠️ MAXN SUPER is permanently blocked on reComputer J401
+>
+> The **reComputer J401 carrier board** (used in J4011 / J4012) **cannot** dissipate the heat
+> generated by **MAXN SUPER** mode on Jetson Orin NX 16 GB or 8 GB modules. Enabling it **will
+> cause permanent damage** to the module.
+> [(Source: Seeed Studio wiki)](https://wiki.seeedstudio.com/reComputer_J4012_Flash_Jetpack/)
+>
+> The `jetson-power-mode` DaemonSet in this project enforces this limit and will **fall back to
+> MAXN** if MAXN SUPER is requested without an explicit safety override.
+
+### Available Power Modes
+
+The `manifests/gpu/power-mode.yaml` DaemonSet configures GPU and CPU clocks at node startup via
+sysfs. It targets the GPU devfreq node at `/sys/bus/platform/devices/17000000.gpu/`.
+
+| Mode | CPU Cores | CPU Max Freq | GPU Max Freq | GPU Governor | Recommended For |
+|------|-----------|-------------|-------------|--------------|-----------------|
+| `10W` | 4 | 1,190 MHz | 612 MHz | `powersave` | Battery / idle |
+| `15W` | 4 | 1,421 MHz | 612 MHz | `nvhost_podgov` | Factory NVIDIA default |
+| `25W` | 8 | 1,498 MHz | 408 MHz | `nvhost_podgov` | CPU-heavy workloads |
+| **`MAXN`** | **8** | **1,984 MHz** | **918 MHz** | **`performance`** | **AI inference ← DEFAULT** |
+| `MAXN_SUPER` | 8 | 1,984 MHz | >918 MHz | `performance` | ⛔ **Blocked on J401** |
+
+### Changing the Power Mode
+
+Edit the `POWER_MODE` env var in `manifests/gpu/power-mode.yaml` before applying:
+
+```yaml
+env:
+  - name: POWER_MODE
+    value: "MAXN"       # 10W | 15W | 25W | MAXN  (MAXN_SUPER blocked)
+  - name: ALLOW_MAXN_SUPER
+    value: "false"      # ⚠ set "true" ONLY with a custom cooling solution
+```
+
+```bash
+kubectl apply -f manifests/gpu/power-mode.yaml
+kubectl logs -n nvidia-system -l app=jetson-power-mode
+# [power-mode] GPU cur_freq=918000000 Hz ✓
+# [power-mode] Power mode MAXN applied ✓
+```
+
+### MAXN SUPER — Custom Cooling Only
+
+If you have replaced the reComputer J401 cooling with a capable third-party heat sink, you may
+enable MAXN SUPER **at your own risk**:
+
+```yaml
+env:
+  - name: POWER_MODE
+    value: "MAXN_SUPER"
+  - name: ALLOW_MAXN_SUPER
+    value: "true"       # ← explicit acknowledgement of thermal risk
+```
+
+> This will push the GPU beyond 918 MHz (up to 1173 MHz on Orin NX 16 GB). The DaemonSet logs
+> a prominent warning when this override is active.
+
+### Verify Frequencies at Runtime
+
+```bash
+# GPU frequency
+talosctl -n <node-ip> read \
+  /sys/bus/platform/devices/17000000.gpu/devfreq/17000000.gpu/cur_freq
+
+# GPU governor
+talosctl -n <node-ip> read \
+  /sys/bus/platform/devices/17000000.gpu/devfreq/17000000.gpu/governor
+
+# Active CPU cores
+talosctl -n <node-ip> read /sys/devices/system/cpu/online
+```
+
+---
+
+## 5. Build Prerequisites
 
 ### Local Build (macOS — optional)
 
@@ -191,7 +419,7 @@ All scripts read from `scripts/common.sh`. Override per-run:
 
 ---
 
-## 3. Local Build & Flash
+## 6. Local Build & Flash
 
 Only needed if you want to modify the kernel, nvgpu driver, or extensions.
 For most users, the [pre-built release image](#1-installation) is the right choice.
@@ -215,7 +443,7 @@ sudo dd if=dist/talos-usb-nvgpu5.10.7.raw of=/dev/rdiskN bs=4m && sync
 
 ---
 
-## 4. GitHub Actions Pipeline
+## 7. GitHub Actions Pipeline
 
 Everything runs fully automated on GitHub — no local build environment needed.
 
@@ -278,7 +506,7 @@ when updates are available.
 
 ---
 
-## 5. Build Pipeline Details
+## 8. Build Pipeline Details
 
 ### Architecture
 
@@ -363,7 +591,7 @@ documented in **[BUGS.md](BUGS.md)**.
 
 ---
 
-## 6. Component Versions
+## 9. Component Versions
 
 | Component | Version | Notes |
 |---|---|---|
@@ -377,229 +605,6 @@ documented in **[BUGS.md](BUGS.md)**.
 | `nvidia-tegra-nvgpu` ext | **5.10.7** | `NVHOST=n` + `nvhost-ctrl-shim` (all ioctls incl. POLL_FD_CREATE; SYNCPT_WAITMEX 30s floor fixes 7B+ model crashes) |
 | `kernel-modules-clang` ext | **1.3.0** | Full Clang-compiled kernel module tree, signed with `talos_signing_key.pem` |
 | `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added; sourced from L4T r36.5 apt (`t234` repo) |
-
----
-
-## 7. GPU Verification
-
-### Check module loaded + devfreq governor active
-
-```bash
-talosctl -n <node-ip> dmesg | grep -E "nvgpu|ga10b|podgov|devfreq"
-# Expected: nvgpu probe, ga10b firmware loaded
-
-talosctl -n <node-ip> read /sys/bus/platform/devices/17000000.gpu/devfreq/17000000.gpu/governor
-# performance  (after power-mode DaemonSet)
-
-talosctl -n <node-ip> read /sys/bus/platform/devices/17000000.gpu/devfreq/17000000.gpu/cur_freq
-# 918000000  (918 MHz in MAXN mode)
-```
-
-### Check nvhost-ctrl-shim loaded
-
-```bash
-talosctl -n <node-ip> dmesg | grep nvhost-ctrl-shim
-# Expected: nvhost-ctrl-shim: /dev/nvhost-ctrl ready (major 505)
-```
-
-### Run a CUDA device check in a pod
-
-```bash
-kubectl run cuda-check \
-  --image=ghcr.io/schwankner/cuda-device-check:v1 \
-  --restart=Never --rm -it \
-  --overrides='{"spec":{"resources":{"limits":{"nvidia.com/gpu":"1"}}}}'
-```
-
-Expected output:
-
-```
-cuInit=0 name=CUDA_SUCCESS
-Device count: 1
-GPU 0: Orin  SM 8.7  15.3 GiB
-```
-
----
-
-## 8. LLM Inference with Ollama
-
-### Recommended Image: `ollama/ollama`
-
-The **official `ollama/ollama`** image is the recommended way to run LLM inference on this setup.
-Starting with Ollama 0.6.x, the image ships a `cuda_jetpack6/libggml-cuda.so` backend that is
-specifically tuned for the GA10B GPU (compute capability 8.7) on Jetson Orin — it is compiled
-with `CMAKE_CUDA_ARCHITECTURES=87` and handles the Tegra UMA memory model correctly.
-
-> **Why not `dustynv/ollama`?**
-> The [`dustynv/ollama`](https://hub.docker.com/r/dustynv/ollama) image (from
-> [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers)) was the standard
-> recommendation for Jetson CUDA workloads for a long time, but **has not been updated since
-> July 7, 2025**. It is missing all Ollama improvements from the past year (newer model support,
-> quantization fixes, performance improvements) and cannot load many modern models at all.
-> Use `ollama/ollama` instead.
-
-### Critical: `JETSON_JETPACK=6` env var
-
-Without this environment variable, `ollama/ollama` silently falls back to **CPU-only mode**:
-
-```
-# Without JETSON_JETPACK=6 — CPU only (wrong):
-time=... level=INFO msg="inference compute" library=cpu
-
-# With JETSON_JETPACK=6 — GPU (correct):
-time=... level=INFO msg="inference compute" library=CUDA compute=8.7 name=CUDA0 \
-  description=Orin driver=12.6 total="15.2 GiB"
-```
-
-Ollama detects the JetPack version via this variable and loads `cuda_jetpack6/libggml-cuda.so`.
-If the variable is missing, Ollama logs: `"jetpack not detected (set JETSON_JETPACK or OLLAMA_LLM_LIBRARY to override)"`.
-
-### Kubernetes Deployment
-
-Apply the included manifest:
-
-```bash
-kubectl apply -f manifests/ollama/ollama-deployment.yaml
-```
-
-The manifest configures:
-
-```yaml
-containers:
-  - name: ollama
-    image: ollama/ollama:0.20.5
-    env:
-      - name: JETSON_JETPACK
-        value: "6"                   # Activates cuda_jetpack6 backend for GA10B
-      - name: OLLAMA_FLASH_ATTENTION
-        value: "1"
-      - name: OLLAMA_NUM_PARALLEL
-        value: "1"
-      - name: CUDA_LAUNCH_BLOCKING
-        value: "0"
-      - name: LD_LIBRARY_PATH
-        value: "/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local/cuda/lib64:/usr/lib/ollama/cuda_jetpack6"
-```
-
-### Pull and run a model
-
-```bash
-# Port-forward to the Ollama service
-kubectl port-forward -n ollama svc/ollama 11434:11434 &
-
-# Pull a model
-curl http://localhost:11434/api/pull -d '{"model":"qwen2.5:7b"}'
-
-# Run inference
-curl -s http://localhost:11434/api/generate \
-  -d '{"model":"qwen2.5:7b","prompt":"Hallo","stream":false}' \
-  | python3 -c "
-import sys,json; d=json.load(sys.stdin)
-print(d['response'][:200])
-e,t = d['eval_count'], d['eval_duration']
-print(f'eval: {e/t*1e9:.1f} tok/s')
-"
-```
-
-### Verified performance (Orin NX 16 GB, MAXN mode, nvgpu 5.10.7)
-
-| Model | Quantization | GPU layers | Prompt eval | Decode |
-|-------|-------------|-----------|------------|--------|
-| qwen2.5:0.5b | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** |
-| qwen2.5:7b | Q4_K_M | 29/29 | ~200–270 tok/s | **~11–12 tok/s** |
-
-> **Note on large models (7B+)**: nvgpu 5.10.7 fixes the previous `CUDA error: unknown error`
-> crash for `qwen2.5:7b` and similar models. The root cause was a SYNCPT_WAITMEX timeout —
-> CUDA passed a ~5s deadline to the kernel wait, which the GA10B exhausted during warmup for
-> large embedding tables. The shim now enforces a 30-second minimum floor. See
-> [BUGS.md — Bug 19](BUGS.md) for the full analysis.
-
-### Debug GPU detection
-
-```bash
-# Enable shim debug logging on the node
-talosctl -n <node-ip> dmesg | grep nvhost-ctrl-shim
-
-# Debug ioctl calls (requires privileged pod):
-echo "file nvhost_ctrl_shim.c +p" > /sys/kernel/debug/dynamic_debug/control
-```
-
----
-
-## 9. GPU Power Modes
-
-> ### ⚠️ MAXN SUPER is permanently blocked on reComputer J401
->
-> The **reComputer J401 carrier board** (used in J4011 / J4012) **cannot** dissipate the heat
-> generated by **MAXN SUPER** mode on Jetson Orin NX 16 GB or 8 GB modules. Enabling it **will
-> cause permanent damage** to the module.
-> [(Source: Seeed Studio wiki)](https://wiki.seeedstudio.com/reComputer_J4012_Flash_Jetpack/)
->
-> The `jetson-power-mode` DaemonSet in this project enforces this limit and will **fall back to
-> MAXN** if MAXN SUPER is requested without an explicit safety override.
-
-### Available Power Modes
-
-The `manifests/gpu/power-mode.yaml` DaemonSet configures GPU and CPU clocks at node startup via
-sysfs. It targets the GPU devfreq node at `/sys/bus/platform/devices/17000000.gpu/`.
-
-| Mode | CPU Cores | CPU Max Freq | GPU Max Freq | GPU Governor | Recommended For |
-|------|-----------|-------------|-------------|--------------|-----------------|
-| `10W` | 4 | 1,190 MHz | 612 MHz | `powersave` | Battery / idle |
-| `15W` | 4 | 1,421 MHz | 612 MHz | `nvhost_podgov` | Factory NVIDIA default |
-| `25W` | 8 | 1,498 MHz | 408 MHz | `nvhost_podgov` | CPU-heavy workloads |
-| **`MAXN`** | **8** | **1,984 MHz** | **918 MHz** | **`performance`** | **AI inference ← DEFAULT** |
-| `MAXN_SUPER` | 8 | 1,984 MHz | >918 MHz | `performance` | ⛔ **Blocked on J401** |
-
-### Changing the Power Mode
-
-Edit the `POWER_MODE` env var in `manifests/gpu/power-mode.yaml` before applying:
-
-```yaml
-env:
-  - name: POWER_MODE
-    value: "MAXN"       # 10W | 15W | 25W | MAXN  (MAXN_SUPER blocked)
-  - name: ALLOW_MAXN_SUPER
-    value: "false"      # ⚠ set "true" ONLY with a custom cooling solution
-```
-
-```bash
-kubectl apply -f manifests/gpu/power-mode.yaml
-kubectl logs -n nvidia-system -l app=jetson-power-mode
-# [power-mode] GPU cur_freq=918000000 Hz ✓
-# [power-mode] Power mode MAXN applied ✓
-```
-
-### MAXN SUPER — Custom Cooling Only
-
-If you have replaced the reComputer J401 cooling with a capable third-party heat sink, you may
-enable MAXN SUPER **at your own risk**:
-
-```yaml
-env:
-  - name: POWER_MODE
-    value: "MAXN_SUPER"
-  - name: ALLOW_MAXN_SUPER
-    value: "true"       # ← explicit acknowledgement of thermal risk
-```
-
-> This will push the GPU beyond 918 MHz (up to 1173 MHz on Orin NX 16 GB). The DaemonSet logs
-> a prominent warning when this override is active.
-
-### Verify Frequencies at Runtime
-
-```bash
-# GPU frequency
-talosctl -n 10.0.10.38 read \
-  /sys/bus/platform/devices/17000000.gpu/devfreq/17000000.gpu/cur_freq
-
-# GPU governor
-talosctl -n 10.0.10.38 read \
-  /sys/bus/platform/devices/17000000.gpu/devfreq/17000000.gpu/governor
-
-# Active CPU cores
-talosctl -n 10.0.10.38 read /sys/devices/system/cpu/online
-```
 
 ---
 
