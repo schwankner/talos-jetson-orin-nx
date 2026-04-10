@@ -457,9 +457,13 @@ Kubernetes pod via CDI.
 > because it uses the default `schedutil` governor. This matters most for small models where
 > the GPU frequently yields back to the CPU scheduler.
 >
-> **Note on 7B+ models**: these are purely memory-bandwidth-bound (we reach 85% of the
-> 68 GB/s LPDDR5 ceiling). No further software tuning can meaningfully improve these numbers;
-> the bottleneck is the physical memory bus, not driver overhead.
+> **Why the ~10–15% gap vs bare JetPack is irreducible**: Exhaustively tested CUDA_DEVICE_MAX_CONNECTIONS,
+> GGML_CUDA_FORCE_MMQ, IPC_LOCK mlock, q4_0 KV cache, and OLLAMA_NUM_GPU — none moved the needle.
+> The root cause is the **nvhost-ctrl-shim**: on Talos, `cudaStreamSynchronize` goes through a
+> userspace syncpoint emulation layer (the shim) rather than directly into the kernel driver as
+> on JetPack. Each token generation requires one sync call, so this overhead is per-token and
+> unavoidable on Talos without a native nvhost kernel driver. This is the fundamental trade-off
+> of running CUDA on a security-hardened immutable OS.
 
 > **Community reference**: NVIDIA's official JetPack 6.2 benchmark reports **~20 tok/s** for
 > qwen2.5:7b on Orin NX 16GB using the [MLC inference API](https://developer.nvidia.com/blog/nvidia-jetpack-6-2-brings-super-mode-to-nvidia-jetson-orin-nx-modules/)
