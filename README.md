@@ -387,6 +387,12 @@ Kubernetes pod via CDI.
 | qwen2.5:0.5b | ~30 tok/s | ~35 tok/s | −14% |
 | qwen2.5:7b | ~12 tok/s | ~13.5 tok/s | −11% |
 | gemma4:e4b (9.6 GB) | ~12 tok/s | ~14.75 tok/s | −19% |
+| qwen3.5:9b ²| — | ~9.8 tok/s | — |
+| ministral-3:14b | — | ~8.3 tok/s | — |
+
+> ² qwen3.5:9b is a reasoning (thinking) model — it performs internal chain-of-thought before
+> answering. The decode rate (9.8 tok/s) reflects raw hardware throughput; the model generates
+> far more tokens per response than non-thinking models due to the reasoning trace.
 
 > **Takeaway**: Talos + Kubernetes adds less than ~20% overhead compared to bare-metal JetPack
 > for all model sizes — and the difference is consistent with a thin container shim (CDI lib
