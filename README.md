@@ -1,9 +1,9 @@
 # Talos Linux on NVIDIA Jetson Orin — GPU Compute / CUDA
 
 [![Talos](https://img.shields.io/badge/Talos-v1.12.6-blue)](https://github.com/siderolabs/talos/releases/tag/v1.12.6)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35.0-blue)](https://kubernetes.io/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35.2-blue)](https://kubernetes.io/)
 [![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
-[![nvgpu](https://img.shields.io/badge/nvgpu-5.10.5-green)](https://github.com/OE4T/linux-nvgpu)
+[![nvgpu](https://img.shields.io/badge/nvgpu-5.10.7-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 [![Build](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin-nx/actions/workflows/release.yaml)
 
@@ -14,8 +14,8 @@ Orin NX, Orin Nano) — all share the same T234 SoC, GA10B GPU, and UEFI boot pa
 Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html)**
 (Jetson Orin NX 16 GB). Verified result as of 2026-04-10:
 
-- GPU inference: **~23 tok/s** decode (qwen2.5:0.5b) / **~18 tok/s** (qwen2.5:1.5b) — all layers on CUDA, Ollama, Flash Attention enabled
-- ⚠️ Models with hidden dim > 1536 (7B+) crash with `GET_ROWS` CUDA error — CPU fallback only (Bug 19)
+- GPU inference: **~30 tok/s** decode (qwen2.5:0.5b) / **~12 tok/s** (qwen2.5:7b) — all layers on CUDA, Ollama, Flash Attention enabled
+- ✅ All models that fit in memory work — qwen2.5:7b GPU crash (Bug 19) **fixed** in nvgpu 5.10.7
 - Hardware syncpoint interrupts via `nvhost-ctrl-shim` — `cudaStreamSynchronize` uses interrupt-driven wait (no CPU polling)
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
 
@@ -33,7 +33,7 @@ Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstu
 > the same restriction. No Jetson setup — official or custom — can run arbitrary CUDA images.
 >
 > **What works ✅**
-> - `ollama/ollama:latest` (arm64) — uses the Tegra CUDA runtime provided by the nvgpu extension in this project
+> - `ollama/ollama:0.20.5` — **recommended** (official Ollama, GA10B-tuned `cuda_jetpack6` backend, requires `JETSON_JETPACK=6` env var — see [§8](#8-llm-inference-with-ollama))
 > - `nvcr.io/nvidia/l4t-cuda:*` — NVIDIA's official L4T CUDA base images
 > - [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers) — community Jetson image collection (PyTorch, TensorRT, etc.)
 > - Any image built `FROM nvcr.io/nvidia/l4t-*` or explicitly targeting Tegra/L4T
@@ -89,13 +89,12 @@ reComputer J4012 which provides NVMe, 2× GbE, and a standard UART TCU connector
 5. [Build Pipeline Details](#5-build-pipeline-details)
 6. [Component Versions](#6-component-versions)
 7. [GPU Verification](#7-gpu-verification)
-8. [GPU Power Modes](#8-gpu-power-modes)
-9. [Known Bugs and Limitations](#9-known-bugs-and-limitations)
-10. [Known Limitations](#10-known-limitations)
-11. [Contributing](#11-contributing)
-12. [References](#12-references)
-11. [Contributing](#11-contributing)
-12. [References](#12-references)
+8. [LLM Inference with Ollama](#8-llm-inference-with-ollama)
+9. [GPU Power Modes](#9-gpu-power-modes)
+10. [Known Bugs and Limitations](#10-known-bugs-and-limitations)
+11. [Known Limitations](#11-known-limitations)
+12. [Contributing](#12-contributing)
+13. [References](#13-references)
 
 ---
 
@@ -122,10 +121,10 @@ download the `.raw` file manually.
 
 ```bash
 # macOS (replace rdiskN with your USB drive — check: diskutil list)
-sudo dd if=talos-usb-nvgpu5.10.5.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=talos-usb-nvgpu5.10.7.raw of=/dev/rdiskN bs=4m && sync
 
 # Linux (replace sdX with your USB drive — check: lsblk)
-sudo dd if=talos-usb-nvgpu5.10.5.raw of=/dev/sdX bs=4M status=progress && sync
+sudo dd if=talos-usb-nvgpu5.10.7.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
 > **Tip**: On macOS use `diskutil unmountDisk /dev/diskN` before flashing.
@@ -188,7 +187,7 @@ All scripts read from `scripts/common.sh`. Override per-run:
 | `REGISTRY_DOCKER` | `host.docker.internal:5001` | Registry as seen from inside Docker |
 | `TALOS_VERSION` | `v1.12.6` | Talos release |
 | `KERNEL_VERSION` | `6.18.18` | Kernel version |
-| `NVGPU_VERSION` | `5.10.5` | nvgpu extension version |
+| `NVGPU_VERSION` | `5.10.7` | nvgpu extension version |
 
 ---
 
@@ -208,10 +207,10 @@ make build-extensions
 make usb
 
 # 4. Flash to USB drive (macOS — replace rdiskN)
-sudo dd if=dist/talos-usb-nvgpu5.10.5.raw of=/dev/rdiskN bs=4m && sync
+sudo dd if=dist/talos-usb-nvgpu5.10.7.raw of=/dev/rdiskN bs=4m && sync
 
 # Linux:
-# sudo dd if=dist/talos-usb-nvgpu5.10.5.raw of=/dev/sdX bs=4M status=progress && sync
+# sudo dd if=dist/talos-usb-nvgpu5.10.7.raw of=/dev/sdX bs=4M status=progress && sync
 ```
 
 ---
@@ -241,7 +240,7 @@ Both jobs run on **native ARM64** (`ubuntu-24.04-arm`) — no QEMU, no cross-com
 ### Trigger a release
 
 ```bash
-git tag v1.12.6-nvgpu5.10.5
+git tag v1.12.6-nvgpu5.10.7
 git push --tags
 # → pipeline builds the image and creates a release with the .raw attached
 ```
@@ -296,8 +295,8 @@ siderolabs/pkgs (commit a92bed5, release-1.12)
                               │    Local Registry / ghcr.io       │
                               │                                   │
                               │  custom-installer:v1.12.6-…      │
-                              │  nvidia-tegra-nvgpu:5.1.0-…      │
-                              │  kernel-modules-clang:1.1.0-…    │
+                              │  nvidia-tegra-nvgpu:5.10.7-…     │
+                              │  kernel-modules-clang:1.3.0-…    │
                               │  nvidia-firmware-ext:v5           │
                               └──────────────┬────────────────────┘
                                              │
@@ -332,8 +331,8 @@ patches to compile these against a standard upstream kernel.
 | Image | Tag | What's inside |
 |---|---|---|
 | `custom-installer` | `v1.12.6-6.18.18` | Official Talos installer + custom Clang vmlinuz (base, no extensions) |
-| `custom-installer` | `v1.12.6-6.18.18-nvgpu5.10.5` | **Full installer with all extensions** — use this for `talosctl upgrade` |
-| `nvidia-tegra-nvgpu` | `5.10.5-6.18.18-talos` | `nvgpu.ko` (NVHOST=n) + `nvhost-ctrl-shim.ko` (SYNCPT_WAITMEX + GET_CHARACTERISTICS) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
+| `custom-installer` | `v1.12.6-6.18.18-nvgpu5.10.7` | **Full installer with all extensions** — use this for `talosctl upgrade` |
+| `nvidia-tegra-nvgpu` | `5.10.7-6.18.18-talos` | `nvgpu.ko` (NVHOST=n) + `nvhost-ctrl-shim.ko` (all CUDA ioctls, 30s SYNCPT floor) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
 | `kernel-modules-clang` | `1.3.0-6.18.18-talos` | Full Clang-compiled kernel module tree |
 | `nvidia-firmware-ext` | `v5` | JetPack r36.5 firmware at `/usr/lib/firmware/ga10b/` incl. `pmu_pkc_prod_sig.bin` |
 
@@ -354,12 +353,13 @@ Current committed key serial: `74FD747A092BD42575ED4CBE6F7E2479A6FEC740`
 
 ### Key Technical Challenges
 
-Getting GPU compute to work required solving 18 non-trivial problems. The full
+Getting GPU compute to work required solving 19 non-trivial problems. The full
 root-cause analysis (firmware ELOOP, signing key reproducibility, GCC 15/Clang 22
 toolchain mismatch, kernel 6.18 API changes, undefined L4T symbols, CUDA error 999,
 devfreq governor, CDI / containerd 2.x, UBSAN netlist bug, CI extension image
 distribution, nvhost-ctrl-shim ioctl implementation, USB boot masking NVMe upgrades,
-pkg.yaml source pin management) is documented in **[BUGS.md](BUGS.md)**.
+pkg.yaml source pin management, SYNCPT_WAITMEX timeout for large models) is
+documented in **[BUGS.md](BUGS.md)**.
 
 ---
 
@@ -368,13 +368,13 @@ pkg.yaml source pin management) is documented in **[BUGS.md](BUGS.md)**.
 | Component | Version | Notes |
 |---|---|---|
 | Talos Linux | **v1.12.6** | pkgs commit `a92bed5`, branch `release-1.12` |
-| Kubernetes | **v1.35.1** | |
+| Kubernetes | **v1.35.2** | |
 | Kernel | **6.18.18-talos** | Clang/LLVM build, reproducible module signing key |
 | LLVM/Clang | `v1.14.0-alpha.0` | `ghcr.io/siderolabs/llvm` |
 | OE4T linux-nvgpu | `d530a48` | patches-r36.5 — the GA10B GPU driver |
 | OE4T linux-nv-oot | `ccf7646` | NVIDIA OOT framework (nvmap, conftest, devfreq) |
 | OE4T linux-hwpm | `4d8a699` | Hardware Performance Monitor |
-| `nvidia-tegra-nvgpu` ext | **5.10.5** | `NVHOST=n` + `nvhost-ctrl-shim` (SYNCPT_WAITMEX + GET_CHARACTERISTICS for `cudaStreamSynchronize`; hot-path `pr_info→pr_debug`) |
+| `nvidia-tegra-nvgpu` ext | **5.10.7** | `NVHOST=n` + `nvhost-ctrl-shim` (all ioctls incl. POLL_FD_CREATE; SYNCPT_WAITMEX 30s floor fixes 7B+ model crashes) |
 | `kernel-modules-clang` ext | **1.3.0** | Full Clang-compiled kernel module tree, signed with `talos_signing_key.pem` |
 | `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added; sourced from L4T r36.5 apt (`t234` repo) |
 
@@ -393,6 +393,13 @@ talosctl -n <node-ip> read /sys/bus/platform/devices/17000000.gpu/devfreq/170000
 
 talosctl -n <node-ip> read /sys/bus/platform/devices/17000000.gpu/devfreq/17000000.gpu/cur_freq
 # 918000000  (918 MHz in MAXN mode)
+```
+
+### Check nvhost-ctrl-shim loaded
+
+```bash
+talosctl -n <node-ip> dmesg | grep nvhost-ctrl-shim
+# Expected: nvhost-ctrl-shim: /dev/nvhost-ctrl ready (major 505)
 ```
 
 ### Run a CUDA device check in a pod
@@ -414,7 +421,112 @@ GPU 0: Orin  SM 8.7  15.3 GiB
 
 ---
 
-## 8. GPU Power Modes
+## 8. LLM Inference with Ollama
+
+### Recommended Image: `ollama/ollama`
+
+The **official `ollama/ollama`** image is the recommended way to run LLM inference on this setup.
+Starting with Ollama 0.6.x, the image ships a `cuda_jetpack6/libggml-cuda.so` backend that is
+specifically tuned for the GA10B GPU (compute capability 8.7) on Jetson Orin — it is compiled
+with `CMAKE_CUDA_ARCHITECTURES=87` and handles the Tegra UMA memory model correctly.
+
+> **Why not `dustynv/ollama`?**
+> The [`dustynv/ollama`](https://hub.docker.com/r/dustynv/ollama) image (from
+> [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers)) was the standard
+> recommendation for Jetson CUDA workloads for a long time, but **has not been updated since
+> July 7, 2025**. It is missing all Ollama improvements from the past year (newer model support,
+> quantization fixes, performance improvements) and cannot load many modern models at all.
+> Use `ollama/ollama` instead.
+
+### Critical: `JETSON_JETPACK=6` env var
+
+Without this environment variable, `ollama/ollama` silently falls back to **CPU-only mode**:
+
+```
+# Without JETSON_JETPACK=6 — CPU only (wrong):
+time=... level=INFO msg="inference compute" library=cpu
+
+# With JETSON_JETPACK=6 — GPU (correct):
+time=... level=INFO msg="inference compute" library=CUDA compute=8.7 name=CUDA0 \
+  description=Orin driver=12.6 total="15.2 GiB"
+```
+
+Ollama detects the JetPack version via this variable and loads `cuda_jetpack6/libggml-cuda.so`.
+If the variable is missing, Ollama logs: `"jetpack not detected (set JETSON_JETPACK or OLLAMA_LLM_LIBRARY to override)"`.
+
+### Kubernetes Deployment
+
+Apply the included manifest:
+
+```bash
+kubectl apply -f manifests/ollama/ollama-deployment.yaml
+```
+
+The manifest configures:
+
+```yaml
+containers:
+  - name: ollama
+    image: ollama/ollama:0.20.5
+    env:
+      - name: JETSON_JETPACK
+        value: "6"                   # Activates cuda_jetpack6 backend for GA10B
+      - name: OLLAMA_FLASH_ATTENTION
+        value: "1"
+      - name: OLLAMA_NUM_PARALLEL
+        value: "1"
+      - name: CUDA_LAUNCH_BLOCKING
+        value: "0"
+      - name: LD_LIBRARY_PATH
+        value: "/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local/cuda/lib64:/usr/lib/ollama/cuda_jetpack6"
+```
+
+### Pull and run a model
+
+```bash
+# Port-forward to the Ollama service
+kubectl port-forward -n ollama svc/ollama 11434:11434 &
+
+# Pull a model
+curl http://localhost:11434/api/pull -d '{"model":"qwen2.5:7b"}'
+
+# Run inference
+curl -s http://localhost:11434/api/generate \
+  -d '{"model":"qwen2.5:7b","prompt":"Hallo","stream":false}' \
+  | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+print(d['response'][:200])
+e,t = d['eval_count'], d['eval_duration']
+print(f'eval: {e/t*1e9:.1f} tok/s')
+"
+```
+
+### Verified performance (Orin NX 16 GB, MAXN mode, nvgpu 5.10.7)
+
+| Model | Quantization | GPU layers | Prompt eval | Decode |
+|-------|-------------|-----------|------------|--------|
+| qwen2.5:0.5b | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** |
+| qwen2.5:7b | Q4_K_M | 29/29 | ~200–270 tok/s | **~11–12 tok/s** |
+
+> **Note on large models (7B+)**: nvgpu 5.10.7 fixes the previous `CUDA error: unknown error`
+> crash for `qwen2.5:7b` and similar models. The root cause was a SYNCPT_WAITMEX timeout —
+> CUDA passed a ~5s deadline to the kernel wait, which the GA10B exhausted during warmup for
+> large embedding tables. The shim now enforces a 30-second minimum floor. See
+> [BUGS.md — Bug 19](BUGS.md) for the full analysis.
+
+### Debug GPU detection
+
+```bash
+# Enable shim debug logging on the node
+talosctl -n <node-ip> dmesg | grep nvhost-ctrl-shim
+
+# Debug ioctl calls (requires privileged pod):
+echo "file nvhost_ctrl_shim.c +p" > /sys/kernel/debug/dynamic_debug/control
+```
+
+---
+
+## 9. GPU Power Modes
 
 > ### ⚠️ MAXN SUPER is permanently blocked on reComputer J401
 >
@@ -491,11 +603,12 @@ talosctl -n 10.0.10.38 read /sys/devices/system/cpu/online
 
 ---
 
-## 9. Known Bugs and Limitations
+## 10. Known Bugs and Limitations
 
 All non-trivial bugs encountered during development — including the full investigation of
-CUDA error 999, the NVHOST=y attempt history, and the GPU decode speed bottleneck — are
-documented with detailed root-cause analysis in **[BUGS.md](BUGS.md)**.
+CUDA error 999, the NVHOST=y attempt history, the GPU decode speed bottleneck, and the
+qwen2.5:7b SYNCPT_WAITMEX timeout root cause — are documented with detailed root-cause
+analysis in **[BUGS.md](BUGS.md)**.
 
 Notable items relevant to day-to-day use:
 
@@ -508,11 +621,11 @@ Notable items relevant to day-to-day use:
 | [Bug 17](BUGS.md) | nvhost-ctrl-shim missing SYNCPT_WAITMEX + GET_CHARACTERISTICS | CUDA error 999 with shim loaded | ✅ Fixed — implemented in nvhost_ctrl_shim.c (5.10.3) |
 | [Bug 18](BUGS.md) | pkg.yaml shim source pin not updated after code change | Old shim code shipped despite version bump | ✅ Fixed — pin `url`+`sha256`+`sha512` in pkg.yaml (5.10.4) |
 | [Bug 9](BUGS.md#bug-9--ubsan-array-index-out-of-bounds-in-netlistc-non-fatal) | UBSAN `netlist.c:617` at every boot | Log noise | ✅ Silenced (flexible array) |
-| [Bug 19](BUGS.md) | `qwen2.5:7b` (7B+ models) crash: `GET_ROWS failed` on GPU | Large models CPU-only | ❌ Open — GA10B shared memory limit hypothesis |
+| [Bug 19](BUGS.md) | `qwen2.5:7b` (7B+ models) crash on first inference | Large models crash on GPU | ✅ Fixed — nvgpu 5.10.7 SYNCPT_WAITMEX 30s floor |
 
 ---
 
-## 10. Known Limitations
+## 11. Known Limitations
 
 | Limitation | Impact | Notes |
 |---|---|---|
@@ -526,7 +639,7 @@ Notable items relevant to day-to-day use:
 
 ---
 
-## 11. Contributing
+## 12. Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 
@@ -538,7 +651,7 @@ Contributions especially welcome for:
 
 ---
 
-## 12. References
+## 13. References
 
 - [Talos Linux v1.12 Documentation](https://www.talos.dev/v1.12/)
 - [Talos System Extensions Guide](https://www.talos.dev/v1.12/talos-guides/configuration/system-extensions/)
@@ -547,12 +660,13 @@ Contributions especially welcome for:
 - [OE4T/linux-nvgpu](https://github.com/OE4T/linux-nvgpu) — nvgpu patches (commit `d530a48`)
 - [OE4T/linux-nv-oot](https://github.com/OE4T/linux-nv-oot) — NVIDIA OOT framework (commit `ea32e7f`)
 - [Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html) — hardware
-- [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers) — Jetson Docker images
+- [ollama/ollama](https://hub.docker.com/r/ollama/ollama) — official Ollama image (recommended for Jetson)
+- [dusty-nv/jetson-containers](https://github.com/dusty-nv/jetson-containers) — Jetson Docker images (last updated Jul 2025)
 - [NVIDIA JetPack SDK](https://developer.nvidia.com/embedded/jetpack) — firmware / CUDA userspace
 
 ---
 
-## 13. AI Disclaimer
+## 14. AI Disclaimer
 
 Parts of this project were developed with the assistance of AI tools (primarily [Claude](https://claude.ai) by Anthropic), in particular:
 
