@@ -275,6 +275,24 @@ The installer image is publicly available on `ghcr.io` — no registry credentia
 
 ---
 
+### Option C — Standard Talos ARM64 Image (no GPU)
+
+The **standard Talos ARM64 installer** (`factory.talos.dev/installer/<schematic>`) boots and
+runs fine on Jetson Orin NX without any modifications — because the Orin NX is an ARM64 UEFI
+machine that Talos supports out of the box.
+
+You get a fully functional Talos + Kubernetes node, but **without GPU access**:
+
+- No `nvidia.com/gpu` resource — GPU pods are not schedulable
+- Ollama and other CUDA workloads fall back to CPU-only (~5.6 tok/s for 7B models)
+- No nvgpu OOT driver, no CDI stack, no nvhost-ctrl-shim
+
+This image (schwankner/talos-jetson-orin) is a drop-in replacement that adds GPU support on
+top of standard Talos — same Talos version, same upgrade path, just with the nvgpu extension
+and CDI stack pre-installed.
+
+---
+
 ## 2. LLM Inference with Ollama
 
 ### Recommended Image: `ollama/ollama`
@@ -337,6 +355,12 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 **The common failure mode** on Jetson is Ollama silently falling back to CPU because the GPU
 stack isn't set up correctly (no device plugin, no CDI spec, missing `JETSON_JETPACK=6`). This
 image solves that — the GPU is guaranteed to be detected and used.
+
+> **Community reference**: NVIDIA's official JetPack 6.2 benchmark reports **~20 tok/s** for
+> qwen2.5:7b on Orin NX 16GB using the [MLC inference API](https://developer.nvidia.com/blog/nvidia-jetpack-6-2-brings-super-mode-to-nvidia-jetson-orin-nx-modules/)
+> (INT4 quantization, not Ollama/GGUF). Our ~12 tok/s with Ollama Q4_K_M is a different stack
+> — Ollama uses llama.cpp/GGUF, which trades some raw throughput for broad model compatibility.
+> No community benchmarks for Ollama specifically on Orin NX 16GB are publicly available.
 
 > **Note on large models (7B+)**: nvgpu 5.10.7 fixes the previous `CUDA error: unknown error`
 > crash for `qwen2.5:7b` and similar models. The root cause was a SYNCPT_WAITMEX timeout —
