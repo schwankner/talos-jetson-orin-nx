@@ -72,8 +72,8 @@
       "description": "LLVM toolchain version for nvidia-tegra-nvgpu build",
       "managerFilePatterns": ["/^scripts/common\\.sh$/"],
       "matchStrings": ["LLVM_REV=\"\\$\\{LLVM_REV:-(?<currentValue>[^}\"]+)\\}\""],
-      "depNameTemplate": "siderolabs/llvm",
-      "datasourceTemplate": "github-releases"
+      "depNameTemplate": "ghcr.io/siderolabs/llvm",
+      "datasourceTemplate": "docker"
     }
   ]
 }
