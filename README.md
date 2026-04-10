@@ -521,13 +521,13 @@ GPU 0: Orin  SM 8.7  15.3 GiB
 The `manifests/gpu/power-mode.yaml` DaemonSet configures GPU and CPU clocks at node startup via
 sysfs. It targets the GPU devfreq node at `/sys/bus/platform/devices/17000000.gpu/`.
 
-| Mode | CPU Cores | CPU Max Freq | GPU Max Freq | GPU Governor | Recommended For |
-|------|-----------|-------------|-------------|--------------|-----------------|
-| `10W` | 4 | 1,190 MHz | 612 MHz | `powersave` | Battery / idle |
-| `15W` | 4 | 1,421 MHz | 612 MHz | `nvhost_podgov` | Factory NVIDIA default |
-| `25W` | 8 | 1,498 MHz | 408 MHz | `nvhost_podgov` | CPU-heavy workloads |
-| **`MAXN`** | **8** | **1,984 MHz** | **918 MHz** | **`performance`** | **AI inference ← DEFAULT** |
-| `MAXN_SUPER` | 8 | 1,984 MHz | up to 1,173 MHz | `performance` | ⛔ **Blocked on J401** — no inference benefit (memory-bandwidth-bound) |
+| Mode | CPU Cores | CPU Max Freq | GPU Max Freq | GPU Governor | EMC (LPDDR5) | Recommended For |
+|------|-----------|-------------|-------------|--------------|--------------|-----------------|
+| `10W` | 4 | 1,190 MHz | 612 MHz | `powersave` | BPMP auto | Battery / idle |
+| `15W` | 4 | 1,421 MHz | 612 MHz | `nvhost_podgov` | BPMP auto | Factory NVIDIA default |
+| `25W` | 8 | 1,498 MHz | 408 MHz | `nvhost_podgov` | BPMP auto | CPU-heavy workloads |
+| **`MAXN`** | **8** | **1,984 MHz** | **918 MHz** | **`performance`** | **3199 MHz (locked)** | **AI inference ← DEFAULT** |
+| `MAXN_SUPER` | 8 | 1,984 MHz | up to 1,173 MHz | `performance` | 3199 MHz (locked) | ⛔ **Blocked on J401** — no inference benefit (memory-bandwidth-bound) |
 
 ### Changing the Power Mode
 
