@@ -815,6 +815,8 @@ Notable items relevant to day-to-day use:
 | [Bug 18](BUGS.md) | pkg.yaml shim source pin not updated after code change | Old shim code shipped despite version bump | ✅ Fixed — pin `url`+`sha256`+`sha512` in pkg.yaml (5.10.4) |
 | [Bug 9](BUGS.md#bug-9--ubsan-array-index-out-of-bounds-in-netlistc-non-fatal) | UBSAN `netlist.c:617` at every boot | Log noise | ✅ Silenced (flexible array) |
 | [Bug 19](BUGS.md) | `qwen2.5:7b` (7B+ models) crash on first inference | Large models crash on GPU | ✅ Fixed — nvgpu 5.10.7 SYNCPT_WAITMEX 30s floor |
+| [Bug 20](BUGS.md) | NVMe EFI not written when USB left in during post-install reboot | `reboot into firmware interface` — NVMe won't boot standalone | ✅ Documented — remove USB before reboot; see [Installation](#1-installation) |
+| [Bug 21](BUGS.md) | `nvhost_ctrl_shim` not auto-loaded on fresh install | `/dev/nvhost-ctrl` missing → CPU polling → ~7 tok/s | ✅ Fixed — `machine.kernel.modules` via `machine-patch-gpu.yaml` |
 
 ---
 
