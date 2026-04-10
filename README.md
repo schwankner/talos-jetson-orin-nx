@@ -392,7 +392,8 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 > 4266 MT/s data rate × 128-bit bus = **68 GB/s**). The DVFS table contains a
 > 3199 MHz entry (for LPDDR5X variants), but BPMP silently clamps to 2133 MHz on
 > this module — 2133 MHz IS the true physical maximum. At 12 tok/s with a 4.7 GB model
-> we're using 57.7 GB/s, which is 85% of the theoretical ceiling.
+> we're using 57.7 GB/s, which is 85% of the theoretical ceiling. At 13.6 tok/s with
+> gemma4:e4b (9.6 GB) we hit 65 GB/s — 96% of the ceiling.
 >
 > **⚠ UMA trap — do NOT use `vm.nr_hugepages` on Jetson**: Jetson uses Unified Memory
 > Architecture (UMA) — GPU and CPU share the same physical LPDDR5 pool. Pre-allocating
@@ -405,7 +406,7 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 |-------|------|-------------|-----------|------------|-------------|----------------------|
 | qwen2.5:0.5b | 397 MB | Q4_K_M | 28/28 | ~1034 tok/s | **~62 tok/s** | ~39 tok/s¹ |
 | qwen2.5:7b | 4.7 GB | Q4_K_M | 29/29 | ~260 tok/s | **~12 tok/s** | ~5.6 tok/s |
-| gemma4:e4b | 9.6 GB | — | all | ~160–275 tok/s | **~12 tok/s** | n/a (OOM) |
+| gemma4:e4b | 9.6 GB | — | all | ~174 tok/s | **~13.6 tok/s** | n/a (OOM) |
 | qwen3.5:9b ²| ~6.6 GB | Q4_K_M | all | ~61 tok/s | **~8.6 tok/s** | n/a |
 | ministral-3:14b | ~9.1 GB | Q4_K_M | all | ~197 tok/s | **~7.1 tok/s** | n/a |
 
@@ -439,7 +440,7 @@ Kubernetes pod via CDI.
 |-------|-------------------|----------------------|-------|
 | qwen2.5:0.5b | **~61 tok/s** | ~35 tok/s | **+74%** |
 | qwen2.5:7b | ~12 tok/s | ~13.5 tok/s | −11% |
-| gemma4:e4b (9.6 GB) | ~12 tok/s | ~14.75 tok/s | −19% |
+| gemma4:e4b (9.6 GB) | ~13.6 tok/s | ~14.75 tok/s | −8% |
 | qwen3.5:9b ²| ~8.6 tok/s | ~9.8 tok/s | −12% |
 | ministral-3:14b | ~7.1 tok/s | ~8.3 tok/s | −14% |
 
