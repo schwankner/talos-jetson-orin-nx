@@ -40,6 +40,15 @@
 #   [plugins."io.containerd.cri.v1.runtime"] in containerd.toml alongside the
 #   import of cri.toml is safe — the keys are additive.
 machine:
+  nodeLabels:
+    # Identifies this node as a Jetson Orin GPU node (iGPU / Tegra SoC).
+    # Use this label in nodeSelector / nodeAffinity to target Jetson workloads.
+    # Deliberately NOT using nvidia.com/* namespace — that is reserved for nodes
+    # with discrete PCIe GPUs managed by the NVIDIA GPU Operator / NFD.
+    accelerator: jetson-orin
+    # Redundant with kubernetes.io/arch=arm64 but explicit for GPU workloads
+    # that need to know they're on an ARM iGPU node.
+    nvidia.com/gpu.type: igpu
   files:
     # Overwrite containerd.toml to add CDI plugin settings inline.
     # CDI is enabled directly here to avoid creating a new file in
