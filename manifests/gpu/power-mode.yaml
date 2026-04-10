@@ -176,6 +176,19 @@ spec:
                 ONLINE=$(cat "${CPU_BASE}/online" 2>/dev/null || echo "?")
                 CPU_GOV=$(cat "${CPU_BASE}/cpufreq/policy0/scaling_governor" 2>/dev/null || echo "?")
                 echo "[power-mode] CPUs online: ${ONLINE}, governor: ${CPU_GOV}"
+
+                # ── Transparent Huge Pages ──────────────────────────────────
+                # THP=always: kernel aggressively collapses 4K→2MB pages.
+                # Reduces TLB pressure for large CPU-side allocations:
+                # Go runtime (Ollama), KV cache, prompt eval buffers.
+                # GPU buffers on Jetson use nvmap (not mmap), so GPU decode
+                # is not affected — but CPU prompt eval benefits noticeably.
+                THP=/sys/kernel/mm/transparent_hugepage
+                if [ -f "${THP}/enabled" ]; then
+                  echo always > "${THP}/enabled"  2>/dev/null || true
+                  echo defer  > "${THP}/defrag"   2>/dev/null || true
+                  echo "[power-mode] THP enabled=always defrag=defer ✓"
+                fi
               }
 
               apply_settings
