@@ -393,6 +393,13 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 > 3199 MHz entry (for LPDDR5X variants), but BPMP silently clamps to 2133 MHz on
 > this module — 2133 MHz IS the true physical maximum. At 12 tok/s with a 4.7 GB model
 > we're using 57.7 GB/s, which is 85% of the theoretical ceiling.
+>
+> **⚠ UMA trap — do NOT use `vm.nr_hugepages` on Jetson**: Jetson uses Unified Memory
+> Architecture (UMA) — GPU and CPU share the same physical LPDDR5 pool. Pre-allocating
+> hugepages (e.g. `vm.nr_hugepages=1024` = 2 GB) directly reduces GPU-visible memory.
+> A 4.7 GB model that previously fit entirely on GPU falls back to a 74%/26% CPU/GPU
+> split, dropping 7b decode from 12 tok/s to 6.5 tok/s. Use THP=always instead — it
+> collapses pages asynchronously without reserving dedicated memory.
 
 | Model | Size | Quantization | GPU layers | Prompt eval | Decode (GPU) | Decode (CPU fallback) |
 |-------|------|-------------|-----------|------------|-------------|----------------------|
