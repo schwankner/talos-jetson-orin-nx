@@ -348,6 +348,10 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 > Token decoding reads the entire model once per token — decode throughput is therefore
 > memory-bandwidth-bound, not compute-bound. This is the hard ceiling for all models on
 > this hardware. Quantization (fewer bytes per weight) is the only way to push past it.
+>
+> This also means **higher GPU clocks provide no benefit**: tested at MAXN_SUPER (1,173 MHz
+> vs. MAXN's 918 MHz), decode throughput stays at ~11–12 tok/s — the GPU never reaches its
+> compute ceiling because it is always waiting for memory, not crunching numbers.
 
 | Model | Size | Quantization | GPU layers | Prompt eval | Decode (GPU) | Decode (CPU fallback) |
 |-------|------|-------------|-----------|------------|-------------|----------------------|
