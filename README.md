@@ -72,9 +72,9 @@ No `privileged: true`. No hostPath volumes. No hardcoded `LD_LIBRARY_PATH`.
 The system-level daemons (`nvidia-cdi-setup`, `nvidia-device-plugin`) run privileged because
 they are node infrastructure — equivalent to kubelet itself needing root. User workloads do not.
 
-> **Note**: The included `manifests/ollama/ollama-cdi.yaml` still sets `privileged: true`
-> as a safety net during initial CDI verification. This can be removed once you have confirmed
-> that CDI injection works correctly on your node — the CDI architecture does not require it.
+> **Verified 2026-04-10**: `manifests/ollama/ollama-cdi.yaml` runs **without `privileged: true`**.
+> qwen2.5:0.5b reached ~50 tok/s via CDI-only injection — no hostPath mounts, no manual
+> `LD_LIBRARY_PATH`, no elevated container privileges required.
 
 ### 3 — nvhost-ctrl-shim: hardware syncpoint interrupts for CUDA
 
@@ -95,7 +95,7 @@ is deliberately disabled (`=n`) to avoid the kernel module signing problem.
 | Device plugin | ❌ None that works on Tegra (no NVML) | ✅ Custom CDI-native plugin |
 | GPU scheduling | ❌ Manual or third-party workarounds | ✅ `nvidia.com/gpu: 1` resource |
 | CDI support | ❌ Not supported for Tegra | ✅ Full CDI stack |
-| Pod privileges | ❌ `privileged: true` + manual `/dev` mounts | ✅ No manual mounts; `privileged` only in system daemons |
+| Pod privileges | ❌ `privileged: true` + manual `/dev` mounts | ✅ No `privileged`, no hostPath mounts (verified) |
 | `cudaStreamSynchronize` | ✅ Hardware interrupts (nvhost in kernel) | ✅ Hardware interrupts via `nvhost-ctrl-shim` |
 | CUDA inference throughput | ✅ ~30 tok/s (0.5b) | ✅ ~30 tok/s (0.5b) — same |
 | Talos / immutable OS | ❌ JetPack ships Ubuntu only | ✅ Talos (immutable, no SSH, Kubernetes-native) |
