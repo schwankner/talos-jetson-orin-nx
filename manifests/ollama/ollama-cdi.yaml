@@ -117,6 +117,13 @@ spec:
             # competes with weight memory bandwidth.
             - name: OLLAMA_KV_CACHE_TYPE
               value: "q8_0"
+            # Go GC tuning — reduce GC frequency during inference.
+            # Default GOGC=100 triggers GC at every 2× heap growth; at 400 GC runs
+            # only at 5× heap growth. Reduces GC pauses between token generations,
+            # most noticeable for small models (0.5b) where CPU↔GPU round-trips are
+            # the bottleneck rather than memory bandwidth.
+            - name: GOGC
+              value: "400"
             # LD_LIBRARY_PATH is injected automatically by the CDI spec.
             # No manual env override needed.
           resources:
