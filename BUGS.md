@@ -554,7 +554,7 @@ non-fatal — GPU channels are created successfully via the NVHOST=n semaphore p
 
 ---
 
-## Bug 15 — GPU Decode Speed: ~7 tok/s (CPU Polling Overhead with NVHOST=n)
+## Bug 15 — GPU Decode Speed: ~7 tok/s (CPU Polling Overhead with NVHOST=n) ✅ FIXED in nvgpu 5.10.4
 
 **Symptom**: Ollama inference (qwen2.5:0.5b, 25/25 layers on CUDA) delivers only ~7 tok/s
 decode on Jetson Orin NX 16 GB. Expected throughput is 20–30 tok/s.
@@ -705,7 +705,42 @@ archived here as documentation for future reference.
 | 5.10.0 | shim | nvhost-ctrl-shim module: /dev/nvhost-ctrl via OOT host1x — wrong ioctl nrs, USB boot mask | ❌ error 999 | — |
 | 5.10.1 | shim | shim debug logging added — nr=9 (SYNCPT_WAITMEX) + nr=14 (GET_CHARACTERISTICS) identified | ❌ error 999 | — |
 | 5.10.2 | shim | retry loop in nvgpu nvhost_host1x.c — shim still missing SYNCPT_WAITMEX (nr=9) | ❌ error 999 | — |
-| **5.10.3** | **shim** | **SYNCPT_WAITMEX + GET_CHARACTERISTICS implemented → interrupt-driven wait** | **🔄 in progress** | **?** |
+| 5.10.3 | shim | SYNCPT_WAITMEX + GET_CHARACTERISTICS implemented — pkg.yaml pin NOT updated (still fetched old shim) | ❌ error 999 | — |
+| **5.10.4** | **shim** | **pkg.yaml pin updated to correct commit — interrupt-driven wait active** | **✅** | **~16 tok/s** |
+| **5.10.5** | **shim** | **pr_info → pr_debug in hot path (SYNCPT_WAITMEX fired 100s×/s → kernel log overhead removed)** | **✅** | **~23 tok/s** |
+
+### Resolution
+
+**Fixed in nvgpu 5.10.4 (2026-04-09).** Root cause was not the polling mechanism itself but a
+missing `/dev/nvhost-ctrl` device that CUDA 12.6 requires for hardware syncpoint waits.
+
+**Solution**: `nvhost-ctrl-shim` kernel module provides `/dev/nvhost-ctrl` with two critical ioctls:
+
+| ioctl | nr | Code | Purpose |
+|-------|----|------|---------|
+| `NVHOST_IOCTL_CTRL_GET_CHARACTERISTICS` | 14 | `0xc010480e` | Capability discovery — returns `num_syncpts=704` for Orin |
+| `NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX` | 9 | `0xc0204809` | Blocking wait via `dma_fence_wait_timeout()` — replaces CPU polling |
+
+CUDA 12.6's `cudaStreamSynchronize` calls `GET_CHARACTERISTICS` once at init, then
+`SYNCPT_WAITMEX` per token during decode. With a real blocking wait (kernel dma_fence),
+the CPU is released between tokens instead of spinning — eliminating the ~130 ms/token overhead.
+
+**Performance result**:
+
+| Metric | Before (CPU polling) | After (nvhost-ctrl-shim) |
+|--------|---------------------|--------------------------|
+| Decode | ~7 tok/s | ~16 tok/s (5.10.4) | **~23 tok/s (5.10.5)** |
+| Prefill | ~110 tok/s | ~1790 tok/s (5.10.4) | **~500 tok/s (5.10.5)** |
+| dmesg | `unknown ioctl 0xc0204809` | `SYNCPT_WAITMEX done` | `SYNCPT_WAITMEX done` (silent — pr_debug) |
+
+**nvgpu 5.10.5 — pr_info → pr_debug**: Hot-path `pr_info` calls in SYNCPT_WAITMEX were firing
+hundreds of times per second during inference, flushing the kernel ring buffer and adding
+measurable per-token overhead. Changed to `pr_debug` (no-op unless CONFIG_DYNAMIC_DEBUG
+enables them) in 5.10.5. Result: **+7 tok/s** (16 → 23 tok/s). Debug logging can be
+re-enabled at runtime:
+```
+echo "file nvhost_ctrl_shim.c +p" > /sys/kernel/debug/dynamic_debug/control
+```
 
 ---
 
