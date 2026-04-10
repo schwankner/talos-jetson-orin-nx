@@ -40,6 +40,14 @@
 #   [plugins."io.containerd.cri.v1.runtime"] in containerd.toml alongside the
 #   import of cri.toml is safe — the keys are additive.
 machine:
+  # Wait for NTP sync before kubelet starts.
+  # The Jetson has no battery-backed RTC — it boots at Unix epoch (1970).
+  # Without this, kubelet tries to use its TLS certificate before the clock
+  # is corrected, which causes a cert rejection and cascading controller errors
+  # for ~90 seconds after boot. bootTimeout forces Talos to wait for a
+  # successful NTP sync before proceeding with the boot sequence.
+  time:
+    bootTimeout: 2m0s
   nodeLabels:
     # Identifies this node as a Jetson Orin GPU node (iGPU / Tegra SoC).
     # Use this label in nodeSelector / nodeAffinity to target Jetson workloads.
