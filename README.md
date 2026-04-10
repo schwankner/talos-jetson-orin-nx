@@ -15,7 +15,7 @@ Developed and tested on a **[Seeed Studio reComputer J4012](https://www.seeedstu
 (Jetson Orin NX 16 GB). Verified result as of 2026-04-10:
 
 - GPU inference: **~30 tok/s** decode (qwen2.5:0.5b) / **~12 tok/s** (qwen2.5:7b, gemma4:e4b) — all layers on CUDA
-- All models that fit in memory work — no 7B+ crash since nvgpu 5.10.7
+- All models that fit in memory work
 - Hardware syncpoint interrupts via `nvhost-ctrl-shim` — `cudaStreamSynchronize` uses interrupt-driven wait (no CPU polling)
 - Dynamic GPU frequency scaling: **306–918 MHz** via `nvhost_podgov` governor (`governor_pod_scaling.ko`)
 
@@ -93,7 +93,8 @@ is deliberately disabled (`=n`) to avoid the kernel module signing problem.
 | CDI support | ❌ Not supported for Tegra | ✅ Full CDI stack |
 | Pod privileges | ❌ `privileged: true` + manual `/dev` mounts | ✅ No `privileged`, no hostPath mounts (verified) |
 | `cudaStreamSynchronize` | ✅ Hardware interrupts (nvhost in kernel) | ✅ Hardware interrupts via `nvhost-ctrl-shim` |
-| CUDA inference throughput | ✅ ~30 tok/s (0.5b) | ✅ ~30 tok/s (0.5b) — same |
+| CUDA inference throughput | ✅ ~12 tok/s (7b) when GPU is used | ✅ ~12 tok/s (7b) — same GPU hardware |
+| Silent CPU fallback risk | ⚠️ Common — GPU stack misconfiguration silently degrades to ~5.6 tok/s | ✅ CDI + device plugin guarantees GPU is used |
 | Talos / immutable OS | ❌ JetPack ships Ubuntu only | ✅ Talos (immutable, no SSH, Kubernetes-native) |
 
 > ### ⚠️ CUDA Container Compatibility — Read Before You Start
@@ -322,11 +323,20 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 
 ### Verified performance (Orin NX 16 GB, MAXN mode, nvgpu 5.10.7)
 
-| Model | Size | Quantization | GPU layers | Prompt eval | Decode |
-|-------|------|-------------|-----------|------------|--------|
-| qwen2.5:0.5b | 397 MB | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** |
-| qwen2.5:7b | 4.7 GB | Q4_K_M | 29/29 | ~200–270 tok/s | **~11–12 tok/s** |
-| gemma4:e4b | 9.6 GB | — | all | ~160–275 tok/s | **~12 tok/s** |
+| Model | Size | Quantization | GPU layers | Prompt eval | Decode (GPU) | Decode (CPU fallback) |
+|-------|------|-------------|-----------|------------|-------------|----------------------|
+| qwen2.5:0.5b | 397 MB | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** | ~39 tok/s¹ |
+| qwen2.5:7b | 4.7 GB | Q4_K_M | 29/29 | ~200–270 tok/s | **~11–12 tok/s** | ~5.6 tok/s |
+| gemma4:e4b | 9.6 GB | — | all | ~160–275 tok/s | **~12 tok/s** | n/a (OOM) |
+
+> ¹ qwen2.5:0.5b is small enough to benefit from CPU cache locality — ARM Cortex-A78AE at this
+> model size is competitive with GPU. The GPU advantage grows substantially with model size:
+> at 7B, GPU is **2.1× faster** than CPU-only. At 9.6 GB (gemma4:e4b), the model doesn't fit
+> in memory without the GPU's UMA access pattern and causes OOM on CPU.
+
+**The common failure mode** on Jetson is Ollama silently falling back to CPU because the GPU
+stack isn't set up correctly (no device plugin, no CDI spec, missing `JETSON_JETPACK=6`). This
+image solves that — the GPU is guaranteed to be detected and used.
 
 > **Note on large models (7B+)**: nvgpu 5.10.7 fixes the previous `CUDA error: unknown error`
 > crash for `qwen2.5:7b` and similar models. The root cause was a SYNCPT_WAITMEX timeout —
