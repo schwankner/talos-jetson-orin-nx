@@ -221,6 +221,26 @@ sudo dd if=talos-usb-nvgpu5.10.7.raw of=/dev/sdX bs=4M status=progress && sync
 > to [Boot & Install](#boot--install). If it runs an older version, update to JetPack 6.2 first using
 > [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager).
 
+#### Generate a machine config
+
+> **Do not use a plain `talosctl gen config` without the GPU patch.** A vanilla Talos machine
+> config uses the wrong installer image (no nvgpu) and does not load the GPU kernel modules.
+> The result: Talos boots, Kubernetes runs, but CUDA fails silently.
+
+```bash
+# Generate a controlplane config with both GPU patches applied in one step:
+talosctl gen config <cluster-name> https://<jetson-ip>:6443 \
+  --config-patch @manifests/talos/machine-patch-gpu.yaml \
+  --config-patch @manifests/talos/machine-patch-cdi.yaml \
+  --output-types controlplane \
+  --output controlplane.yaml
+```
+
+The two patches add:
+- **`machine-patch-gpu.yaml`** — correct installer image + explicit `kernel.modules` load order
+  (nvhost_ctrl_shim has no device-tree entry; without explicit loading, CUDA uses CPU polling)
+- **`machine-patch-cdi.yaml`** — CDI support in containerd + Jetson node labels
+
 #### Boot & Install
 
 1. Plug the USB drive into the Jetson.
@@ -229,15 +249,22 @@ sudo dd if=talos-usb-nvgpu5.10.7.raw of=/dev/sdX bs=4M status=progress && sync
 4. Talos boots into **maintenance mode** (no STATE partition found on NVMe yet).
 5. Apply your machine config:
    ```bash
-   talosctl apply-config --insecure -n <jetson-ip> --file your-machine-config.yaml
+   talosctl apply-config --insecure -n <jetson-ip> --file controlplane.yaml
    ```
-6. Talos installs itself to NVMe, reboots automatically, and comes up fully operational.
-7. Bootstrap the cluster (first boot only):
+6. **Remove the USB drive immediately** when the node starts rebooting (watch the UART log
+   for `rebooting`). If the USB stays in, the UEFI boots USB again on every restart and the
+   NVMe EFI bootloader is never written — resulting in `reboot into firmware interface` when
+   the USB is eventually removed.
+7. Talos boots from NVMe, comes up fully operational.
+8. Bootstrap the cluster (first boot only):
    ```bash
    talosctl bootstrap -n <jetson-ip>
    ```
 
-> After step 6 you can remove the USB drive. Talos boots from NVMe on all subsequent reboots.
+> If you missed the USB removal window and are stuck with `reboot into firmware interface`:
+> re-insert USB, boot into Talos maintenance mode, apply the config again, and remove USB
+> before the reboot completes. Alternatively run `talosctl upgrade --preserve` (see Option B)
+> which rewrites the NVMe EFI partition regardless of USB state.
 
 ---
 

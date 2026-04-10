@@ -1,0 +1,55 @@
+# Talos machine config patch — GPU kernel modules + installer image
+#
+# This patch is REQUIRED for GPU compute (CUDA) to work. It does two things:
+#
+# 1. Sets the correct installer image (includes nvgpu OOT driver + nvhost-ctrl-shim)
+# 2. Explicitly loads the GPU kernel modules at boot
+#
+# Why explicit kernel.modules is needed:
+#   nvhost_ctrl_shim creates /dev/nvhost-ctrl (hardware syncpoint interrupts for CUDA).
+#   It has no device tree entry, so the kernel never auto-loads it via device probe.
+#   Without it, cudaStreamSynchronize falls back to CPU polling (~7 tok/s instead of ~30).
+#   The softdep in modprobe.d is only effective when userspace modprobe calls nvgpu;
+#   when the GPU device probe triggers kernel-internal module loading, softdep is bypassed.
+#
+# How to apply:
+#   # Option A — during initial config generation (recommended):
+#   talosctl gen config <cluster-name> https://<jetson-ip>:6443 \
+#     --config-patch @manifests/talos/machine-patch-gpu.yaml \
+#     --config-patch @manifests/talos/machine-patch-cdi.yaml \
+#     --output-types controlplane \
+#     --output controlplane.yaml
+#
+#   # Option B — patch an existing machine config:
+#   talosctl machineconfig patch controlplane.yaml \
+#     --patch @manifests/talos/machine-patch-gpu.yaml \
+#     --output controlplane.yaml
+#
+#   # Option C — apply live to a running node (requires reboot):
+#   talosctl apply-config \
+#     --nodes <jetson-ip> --talosconfig ./talosconfig \
+#     --patch @manifests/talos/machine-patch-gpu.yaml \
+#     --mode reboot
+machine:
+  install:
+    disk: /dev/nvme0n1
+    image: ghcr.io/schwankner/custom-installer:v1.12.6-6.18.18-nvgpu5.10.7
+    wipe: false
+  kernel:
+    modules:
+      # Load order matters: host1x → host1x-fence → nvhost-ctrl-shim → nvmap → nvgpu
+      # host1x: OE4T syncpoint allocator (prerequisite for nvhost-ctrl-shim and nvgpu)
+      - name: host1x
+      # host1x-fence: fence extraction for GPU/CPU sync (required by nvgpu)
+      - name: host1x_fence
+      # nvhost-ctrl-shim: provides /dev/nvhost-ctrl with SYNCPT_WAITMEX ioctl
+      # MUST load before nvgpu so the device exists when libcuda.so opens it at cuInit
+      - name: nvhost_ctrl_shim
+      # nvmap: GPU memory allocator (required by nvgpu)
+      - name: nvmap
+      # mc-utils: memory controller bandwidth helper (required by nvgpu)
+      - name: mc_utils
+      # nvgpu: GA10B Ampere GPU driver (main CUDA driver)
+      - name: nvgpu
+      # governor_pod_scaling: nvhost_podgov devfreq governor (dynamic GPU frequency)
+      - name: governor_pod_scaling
