@@ -351,6 +351,13 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 > model size is competitive with GPU. The GPU advantage grows substantially with model size:
 > at 7B, GPU is **2.1× faster** than CPU-only. At 9.6 GB (gemma4:e4b), the model doesn't fit
 > in memory without the GPU's UMA access pattern and causes OOM on CPU.
+>
+> **Memory bandwidth ceiling**: qwen2.5:7b (4.7 GB) and gemma4:e4b (9.6 GB) both decode at
+> ~12 tok/s despite their size difference. This is expected: the GA10B has ~68 GB/s of LPDDR5
+> memory bandwidth, and token decoding is purely memory-bound (one full model read per token).
+> Both models hit the same DRAM throughput ceiling — throwing a larger model at the GPU does
+> not reduce decode speed further, but it also cannot be accelerated beyond this hardware limit
+> without quantization or a faster memory subsystem.
 
 **The common failure mode** on Jetson is Ollama silently falling back to CPU because the GPU
 stack isn't set up correctly (no device plugin, no CDI spec, missing `JETSON_JETPACK=6`). This
