@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Talos Linux on Jetson Orin — dependency update config.",
+  "description": "Talos Linux on Jetson Orin — dependency update config. Talos + kernel versions are managed by update-talos.yaml workflow (not Renovate) to keep them in sync with siderolabs/pkgs.",
   "extends": [
     "config:recommended",
     ":dependencyDashboard"
@@ -15,32 +15,10 @@
   "automerge": true,
   "automergeType": "pr",
   "automergeStrategy": "squash",
+  "ignorePaths": [
+    "scripts/common.sh"
+  ],
   "packageRules": [
-    {
-      "description": "Talos stack (Talos + kernel + LLVM) — NO automerge. Kernel/Talos bumps require nvgpu rebuild + talosctl upgrade + manual verification.",
-      "matchManagers": ["custom.regex"],
-      "matchFileNames": ["scripts/common.sh"],
-      "groupName": "Talos stack",
-      "groupSlug": "talos-stack",
-      "labels": ["dependencies", "talos-update"],
-      "automerge": false,
-      "commitMessageTopic": "Talos stack"
-    },
-    {
-      "description": "Kernel: only patch-level updates within current stable series (6.18.x). Minor bumps (6.18 → 6.19) require nvgpu module compatibility testing.",
-      "matchManagers": ["custom.regex"],
-      "matchFileNames": ["scripts/common.sh"],
-      "matchDepNames": ["stable/linux"],
-      "allowedVersions": "/^6\\.18\\./"
-    },
-    {
-      "description": "Talos: only stable patch releases (v1.12.x). Pre-releases and minor bumps require manual testing.",
-      "matchManagers": ["custom.regex"],
-      "matchFileNames": ["scripts/common.sh"],
-      "matchDepNames": ["siderolabs/talos"],
-      "allowedVersions": "!/alpha|beta|rc/",
-      "matchUpdateTypes": ["patch"]
-    },
     {
       "description": "GitHub Actions — automerge all updates",
       "matchManagers": ["github-actions"],
@@ -57,43 +35,6 @@
       "description": "Docker base images — require manual review",
       "matchManagers": ["dockerfile"],
       "automerge": false
-    }
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Talos version in common.sh",
-      "managerFilePatterns": ["/^scripts/common\\.sh$/"],
-      "matchStrings": ["TALOS_VERSION=\"\\$\\{TALOS_VERSION:-(?<currentValue>[^}\"]+)\\}\""],
-      "depNameTemplate": "siderolabs/talos",
-      "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^v?(?<version>.*)$"
-    },
-    {
-      "customType": "regex",
-      "description": "Kernel stable patch version in common.sh (tracks stable/linux tags, 6.18.x series only)",
-      "managerFilePatterns": ["/^scripts/common\\.sh$/"],
-      "matchStrings": ["KERNEL_VERSION=\"\\$\\{KERNEL_VERSION:-(?<currentValue>[^}\"]+)\\}\""],
-      "depNameTemplate": "stable/linux",
-      "datasourceTemplate": "github-tags",
-      "extractVersionTemplate": "^v?(?<version>.*)$",
-      "versioningTemplate": "semver-coerced"
-    },
-    {
-      "customType": "regex",
-      "description": "LLVM toolchain version for nvidia-tegra-nvgpu build",
-      "managerFilePatterns": ["/^scripts/common\\.sh$/"],
-      "matchStrings": ["LLVM_REV=\"\\$\\{LLVM_REV:-(?<currentValue>[^}\"]+)\\}\""],
-      "depNameTemplate": "siderolabs/llvm",
-      "datasourceTemplate": "github-releases"
-    },
-    {
-      "customType": "regex",
-      "description": "Talos version referenced in GitHub Actions workflows",
-      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
-      "matchStrings": ["TALOS_VERSION: '(?<currentValue>[^']+)'"],
-      "depNameTemplate": "siderolabs/talos",
-      "datasourceTemplate": "github-releases"
     }
   ]
 }
