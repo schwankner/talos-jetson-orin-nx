@@ -159,7 +159,7 @@ jobs:
           ls -lh dist/
 
       - name: Upload USB image as workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: talos-jetson-usb-${{ github.ref_name }}
           path: ${{ steps.img.outputs.path }}
