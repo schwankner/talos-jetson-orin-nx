@@ -341,6 +341,11 @@ LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/nvidia:/usr/local/cuda/lib:/usr/local
 
 ### Verified performance (Orin NX 16 GB, MAXN mode, nvgpu 5.10.7)
 
+> **Bottleneck: GA10B memory bandwidth (~68 GB/s LPDDR5)**
+> Token decoding reads the entire model once per token — decode throughput is therefore
+> memory-bandwidth-bound, not compute-bound. This is the hard ceiling for all models on
+> this hardware. Quantization (fewer bytes per weight) is the only way to push past it.
+
 | Model | Size | Quantization | GPU layers | Prompt eval | Decode (GPU) | Decode (CPU fallback) |
 |-------|------|-------------|-----------|------------|-------------|----------------------|
 | qwen2.5:0.5b | 397 MB | Q4_K_M | 28/28 | ~500 tok/s | **~30 tok/s** | ~39 tok/s¹ |
