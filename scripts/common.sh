@@ -15,7 +15,7 @@ CACHE_REGISTRY="${CACHE_REGISTRY:-}"  # set to ghcr.io/<owner>/build-cache in CI
 
 # ── Talos version ────────────────────────────────────────────────────────────
 TALOS_VERSION="${TALOS_VERSION:-v1.12.6}"
-KERNEL_VERSION="${KERNEL_VERSION:-6.18.18}"
+KERNEL_VERSION="${KERNEL_VERSION:-6.19}"
 
 # ── siderolabs/pkgs pin (must match the Talos release above) ─────────────────
 PKGS_COMMIT="${PKGS_COMMIT:-a92bed5}"    # exact commit that produced Talos v1.12.6
