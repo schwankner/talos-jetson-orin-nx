@@ -2,6 +2,9 @@
 //
 // nvhost_ctrl_shim.c — nvhost-ctrl userspace API shim for Talos Linux / Jetson Orin NX
 //
+// Per-ioctl trace logging uses pr_debug — enable at runtime with:
+//   echo "file nvhost_ctrl_shim.c +p" > /sys/kernel/debug/dynamic_debug/control
+//
 // Provides /dev/nvhost-ctrl with the NVHOST_IOCTL_CTRL_* interface,
 // bridging to the OOT host1x syncpoint kernel API.
 //
@@ -194,7 +197,7 @@ static int nvhost_ctrl_open(struct inode *inode, struct file *file)
 		return PTR_ERR(host1x);
 	}
 
-	pr_info("nvhost-ctrl-shim: opened (pid %d)\n", current->pid);
+	pr_debug("nvhost-ctrl-shim: opened (pid %d)\n", current->pid);
 	file->private_data = host1x;
 	return 0;
 }
@@ -238,8 +241,8 @@ static int ioctl_syncpt_waitmex(struct host1x *host1x, void __user *data)
 	if (copy_from_user(&args, data, sizeof(args)))
 		return -EFAULT;
 
-	pr_info("nvhost-ctrl-shim: SYNCPT_WAITMEX id=%u thresh=%u timeout=%d\n",
-		args.id, args.thresh, args.timeout);
+	pr_debug("nvhost-ctrl-shim: SYNCPT_WAITMEX id=%u thresh=%u timeout=%d\n",
+		 args.id, args.thresh, args.timeout);
 
 	sp = host1x_syncpt_get_by_id_noref(host1x, args.id);
 	if (!sp) {
@@ -280,8 +283,8 @@ static int ioctl_syncpt_waitmex(struct host1x *host1x, void __user *data)
 	args.tv_sec = 0;
 	args.tv_nsec = 0;
 
-	pr_info("nvhost-ctrl-shim: SYNCPT_WAITMEX done id=%u value=%u\n",
-		args.id, args.value);
+	pr_debug("nvhost-ctrl-shim: SYNCPT_WAITMEX done id=%u value=%u\n",
+		 args.id, args.value);
 
 	return copy_to_user(data, &args, sizeof(args)) ? -EFAULT : 0;
 }
@@ -306,8 +309,8 @@ static int ioctl_get_characteristics(void __user *data)
 	if (copy_from_user(&req, data, sizeof(req)))
 		return -EFAULT;
 
-	pr_info("nvhost-ctrl-shim: GET_CHARACTERISTICS buf_size=%llu\n",
-		req.nvhost_characteristics_buf_size);
+	pr_debug("nvhost-ctrl-shim: GET_CHARACTERISTICS buf_size=%llu\n",
+		 req.nvhost_characteristics_buf_size);
 
 	if (!req.nvhost_characteristics_buf_addr) {
 		// Only querying the required size
@@ -434,7 +437,7 @@ static int ioctl_sync_fence_create(struct host1x *host1x, void __user *data)
 	if (copy_from_user(&args, data, sizeof(args)))
 		return -EFAULT;
 
-	pr_info("nvhost-ctrl-shim: SYNC_FENCE_CREATE num_pts=%u\n", args.num_pts);
+	pr_debug("nvhost-ctrl-shim: SYNC_FENCE_CREATE num_pts=%u\n", args.num_pts);
 
 	if (args.num_pts == 0 || args.num_pts > 512)
 		return -EINVAL;
@@ -444,8 +447,8 @@ static int ioctl_sync_fence_create(struct host1x *host1x, void __user *data)
 	if (args.num_pts == 1) {
 		if (copy_from_user(&pt, pts_user, sizeof(pt)))
 			return -EFAULT;
-		pr_info("nvhost-ctrl-shim: SYNC_FENCE_CREATE id=%u thresh=%u\n",
-			pt.id, pt.thresh);
+		pr_debug("nvhost-ctrl-shim: SYNC_FENCE_CREATE id=%u thresh=%u\n",
+			 pt.id, pt.thresh);
 		sp = host1x_syncpt_get_by_id_noref(host1x, pt.id);
 		if (!sp) {
 			pr_err("nvhost-ctrl-shim: SYNC_FENCE_CREATE id=%u not found\n",
@@ -462,7 +465,7 @@ static int ioctl_sync_fence_create(struct host1x *host1x, void __user *data)
 		return fd;
 	}
 
-	pr_info("nvhost-ctrl-shim: SYNC_FENCE_CREATE → fd=%d\n", fd);
+	pr_debug("nvhost-ctrl-shim: SYNC_FENCE_CREATE → fd=%d\n", fd);
 	args.fence_fd = fd;
 	if (copy_to_user(data, &args, sizeof(args))) {
 		close_fd(fd);
@@ -541,7 +544,7 @@ static long nvhost_ctrl_ioctl(struct file *file, unsigned int cmd,
 	switch (cmd) {
 	case NVHOST_IOCTL_CTRL_GET_VERSION: {
 		struct nvhost_get_param_args v = { .value = 1 };
-		pr_info("nvhost-ctrl-shim: GET_VERSION → 1\n");
+		pr_debug("nvhost-ctrl-shim: GET_VERSION → 1\n");
 		return copy_to_user(data, &v, sizeof(v)) ? -EFAULT : 0;
 	}
 	case NVHOST_IOCTL_CTRL_SYNCPT_READ:
