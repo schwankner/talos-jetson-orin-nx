@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Talos Linux on Jetson Orin NX — dependency update config.\n\nWhen Renovate opens a PR, CI runs (shellcheck + YAML validate).\nAfter CI passes, Renovate automerges to main.\nauto-tag.yaml then creates a versioned tag → release.yaml builds the full USB image.",
+  "description": "Talos Linux on Jetson Orin — dependency update config.",
   "extends": [
     "config:recommended",
     ":dependencyDashboard"
@@ -17,23 +17,44 @@
   "automergeStrategy": "squash",
   "packageRules": [
     {
-      "description": "Group all Talos stack updates (Talos + kernel + pkgs branch + LLVM)",
+      "description": "Talos stack (Talos + kernel + LLVM) — NO automerge. Kernel/Talos bumps require nvgpu rebuild + talosctl upgrade + manual verification.",
       "matchManagers": ["custom.regex"],
       "matchFileNames": ["scripts/common.sh"],
       "groupName": "Talos stack",
       "groupSlug": "talos-stack",
       "labels": ["dependencies", "talos-update"],
-      "automerge": true,
+      "automerge": false,
       "commitMessageTopic": "Talos stack"
     },
     {
-      "description": "GitHub Actions — automerge all updates (pinned SHA digests preferred)",
+      "description": "Kernel: only patch-level updates within current stable series (6.18.x). Minor bumps (6.18 → 6.19) require nvgpu module compatibility testing.",
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["scripts/common.sh"],
+      "matchDepNames": ["stable/linux"],
+      "allowedVersions": "/^6\\.18\\./"
+    },
+    {
+      "description": "Talos: only stable patch releases (v1.12.x). Pre-releases and minor bumps require manual testing.",
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["scripts/common.sh"],
+      "matchDepNames": ["siderolabs/talos"],
+      "allowedVersions": "!/alpha|beta|rc/",
+      "matchUpdateTypes": ["patch"]
+    },
+    {
+      "description": "GitHub Actions — automerge all updates",
       "matchManagers": ["github-actions"],
       "automerge": true,
       "automergeType": "pr"
     },
     {
-      "description": "Docker base images in Dockerfiles — require manual review",
+      "description": "Go modules — automerge patch and minor updates",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true
+    },
+    {
+      "description": "Docker base images — require manual review",
       "matchManagers": ["dockerfile"],
       "automerge": false
     }
@@ -50,10 +71,10 @@
     },
     {
       "customType": "regex",
-      "description": "Kernel version in common.sh (tracks torvalds/linux tags)",
+      "description": "Kernel stable patch version in common.sh (tracks stable/linux tags, 6.18.x series only)",
       "managerFilePatterns": ["/^scripts/common\\.sh$/"],
       "matchStrings": ["KERNEL_VERSION=\"\\$\\{KERNEL_VERSION:-(?<currentValue>[^}\"]+)\\}\""],
-      "depNameTemplate": "torvalds/linux",
+      "depNameTemplate": "stable/linux",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^v?(?<version>.*)$",
       "versioningTemplate": "semver-coerced"
