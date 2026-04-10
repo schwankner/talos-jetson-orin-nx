@@ -72,10 +72,6 @@ No `privileged: true`. No hostPath volumes. No hardcoded `LD_LIBRARY_PATH`.
 The system-level daemons (`nvidia-cdi-setup`, `nvidia-device-plugin`) run privileged because
 they are node infrastructure — equivalent to kubelet itself needing root. User workloads do not.
 
-> **Verified 2026-04-10**: `manifests/ollama/ollama-cdi.yaml` runs **without `privileged: true`**.
-> qwen2.5:0.5b reached ~50 tok/s via CDI-only injection — no hostPath mounts, no manual
-> `LD_LIBRARY_PATH`, no elevated container privileges required.
-
 ### 3 — nvhost-ctrl-shim: hardware syncpoint interrupts for CUDA
 
 Without this kernel module, CUDA's `cudaStreamSynchronize` falls back to **CPU semaphore
