@@ -17,15 +17,27 @@
   "automergeStrategy": "squash",
   "packageRules": [
     {
-      "description": "Talos stable releases only — no alpha/beta/rc, no minor version jumps. Minor bumps (v1.12 → v1.13) require nvgpu module compatibility testing.",
+      "description": "Talos — block pre-release versions (alpha/beta/rc)",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["siderolabs/talos"],
+      "allowedVersions": "!/alpha|beta|rc/"
+    },
+    {
+      "description": "Talos — patch updates only, manual review required. Minor bumps (v1.12 → v1.13) require nvgpu module compatibility testing.",
       "matchManagers": ["custom.regex"],
       "matchFileNames": ["scripts/common.sh"],
       "matchDepNames": ["siderolabs/talos"],
-      "allowedVersions": "!/alpha|beta|rc/",
       "matchUpdateTypes": ["patch"],
       "automerge": false,
       "labels": ["dependencies", "talos-update"],
       "commitMessageTopic": "Talos"
+    },
+    {
+      "description": "Talos — disable minor/major auto-updates (manual kernel compatibility check required)",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["siderolabs/talos"],
+      "matchUpdateTypes": ["minor", "major"],
+      "enabled": false
     },
     {
       "description": "GitHub Actions — automerge all updates",
