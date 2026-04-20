@@ -1,8 +1,8 @@
 # Talos Linux on NVIDIA Jetson Orin — GPU Compute / CUDA
 
-[![Talos](https://img.shields.io/badge/Talos-v1.12.6-blue)](https://github.com/siderolabs/talos/releases/tag/v1.12.6)
+[![Talos](https://img.shields.io/badge/Talos-v1.13.0--rc.0-blue)](https://github.com/siderolabs/talos/releases/tag/v1.13.0-rc.0)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.35.2-blue)](https://kubernetes.io/)
-[![Kernel](https://img.shields.io/badge/kernel-6.18.18--talos-orange)](https://github.com/siderolabs/pkgs)
+[![Kernel](https://img.shields.io/badge/kernel-6.18.22--talos-orange)](https://github.com/siderolabs/pkgs)
 [![nvgpu](https://img.shields.io/badge/nvgpu-5.10.7-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 [![Build](https://github.com/schwankner/talos-jetson-orin/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin/actions/workflows/release.yaml)
@@ -41,7 +41,7 @@ that uses the CDI path instead of NVML:
 1. Pod requests `resources.limits["nvidia.com/gpu": "1"]`
 2. The plugin returns a `CDIDevices` response: `nvidia.com/gpu=0`
 3. kubelet passes the CDI device ID to containerd via the CRI interface
-4. containerd reads `/var/run/cdi/nvidia-jetson.yaml` and **automatically injects**:
+4. containerd reads `/run/cdi/nvidia-jetson.yaml` and **automatically injects**:
    - All `/dev/nvgpu/igpu0/*` device nodes
    - `/dev/nvmap` (GPU memory allocator)
    - `/dev/nvhost-ctrl` (syncpoint wait — provided by `nvhost-ctrl-shim`)
@@ -91,7 +91,7 @@ is deliberately disabled (`=n`) to avoid the kernel module signing problem.
 | Device plugin | ❌ None that works on Tegra (no NVML) | ✅ Custom CDI-native plugin |
 | GPU scheduling | ❌ Manual or third-party workarounds | ✅ `nvidia.com/gpu: 1` resource |
 | CDI support | ❌ Not supported for Tegra | ✅ Full CDI stack |
-| Pod privileges | ❌ `privileged: true` + manual `/dev` mounts | ✅ No `privileged`, no hostPath mounts (verified) |
+| Pod privileges | ❌ `privileged: true` + manual `/dev` mounts | ✅ No `privileged`, no hostPath mounts |
 | `cudaStreamSynchronize` | ✅ Hardware interrupts (nvhost in kernel) | ✅ Hardware interrupts via `nvhost-ctrl-shim` |
 | CUDA inference throughput | ✅ ~12 tok/s (7b) when GPU is used | ✅ ~12 tok/s (7b) — same GPU hardware |
 | Silent CPU fallback risk | ⚠️ Common — GPU stack misconfiguration silently degrades to ~5.6 tok/s | ✅ CDI + device plugin guarantees GPU is used |
@@ -239,7 +239,7 @@ talosctl gen config <cluster-name> https://<jetson-ip>:6443 \
 The two patches add:
 - **`machine-patch-gpu.yaml`** — correct installer image + explicit `kernel.modules` load order
   (nvhost_ctrl_shim has no device-tree entry; without explicit loading, CUDA uses CPU polling)
-- **`machine-patch-cdi.yaml`** — CDI support in containerd + Jetson node labels
+- **`machine-patch-cdi.yaml`** — Jetson node labels (CDI is enabled by default in Talos 1.13+; no containerd.toml override needed)
 
 #### Boot & Install
 
@@ -278,7 +278,7 @@ your machine config, etcd state, and Kubernetes workloads intact.
 
 - JetPack 6.2 (L4T r36.5) must have been flashed at some point — the GPU firmware it writes
   to the Jetson's eMMC persists across Talos upgrades.
-- `talosctl` v1.12.x and a working `talosconfig` for the node.
+- `talosctl` v1.13.x and a working `talosconfig` for the node.
 
 #### Upgrade command
 
@@ -286,7 +286,7 @@ your machine config, etcd state, and Kubernetes workloads intact.
 talosctl upgrade \
   --nodes <jetson-ip> \
   --talosconfig ./talosconfig \
-  --image ghcr.io/schwankner/custom-installer:v1.12.6-6.18.18-nvgpu5.10.7 \
+  --image ghcr.io/schwankner/custom-installer:v1.13.0-rc.0-6.18.22-nvgpu5.10.7 \
   --preserve
 ```
 
@@ -296,7 +296,7 @@ The installer image is publicly available on `ghcr.io` — no registry credentia
 
 1. Talos downloads the installer image from `ghcr.io`.
 2. The node reboots into the installer, which writes the new system partition.
-3. On the next boot, Talos v1.12.6 starts with the custom kernel (6.18.18-talos), nvgpu
+3. On the next boot, Talos v1.13.0-rc.0 starts with the custom kernel (6.18.22-talos), nvgpu
    5.10.7 extension, and nvhost-ctrl-shim — CUDA is available immediately.
 4. Your machine config, etcd data, and workloads are preserved.
 
@@ -621,7 +621,7 @@ talosctl -n <node-ip> read /sys/devices/system/cpu/online
   ```bash
   docker run -d --name registry --restart=always -p 5001:5000 registry:2
   ```
-- `talosctl` v1.12.x: `brew install siderolabsio/tap/talosctl`
+- `talosctl` v1.13.x: `brew install siderolabsio/tap/talosctl`
 
 > **Disk space**: the kernel build generates ~15 GB of intermediate objects.
 > Ensure the Colima VM has ≥ 40 GB free. Clear cache before a full rebuild:
@@ -635,8 +635,8 @@ All scripts read from `scripts/common.sh`. Override per-run:
 |---|---|---|
 | `REGISTRY` | `192.168.1.100:5001` | Local OCI registry (reachable from Jetson) |
 | `REGISTRY_DOCKER` | `host.docker.internal:5001` | Registry as seen from inside Docker |
-| `TALOS_VERSION` | `v1.12.6` | Talos release |
-| `KERNEL_VERSION` | `6.18.18` | Kernel version |
+| `TALOS_VERSION` | `v1.13.0-rc.0` | Talos release |
+| `KERNEL_VERSION` | `6.18.22` | Kernel version |
 | `NVGPU_VERSION` | `5.10.7` | nvgpu extension version |
 
 ---
@@ -692,7 +692,7 @@ Both jobs run on **native ARM64** (`ubuntu-24.04-arm`) — no QEMU, no cross-com
 ### Trigger a release
 
 ```bash
-git tag v1.12.6-nvgpu5.10.7
+git tag v1.13.0-rc.0-nvgpu5.10.7
 git push --tags
 # → pipeline builds the image and creates a release with the .raw attached
 ```
@@ -735,9 +735,9 @@ when updates are available.
 ### Architecture
 
 ```
-siderolabs/pkgs (commit a92bed5, release-1.12)
+siderolabs/pkgs (commit b1215665, release-1.13)
     │
-    ├─ kernel/build ──(Clang/LLVM, reproducible signing key)──► vmlinuz (6.18.18-talos)
+    ├─ kernel/build ──(Clang/LLVM, reproducible signing key)──► vmlinuz (6.18.22-talos)
     │                                                             │
     └─ nvidia-tegra-nvgpu ──(OE4T patches-r36.5, Clang)────────► nvgpu.ko
                                                                   governor_pod_scaling.ko
@@ -746,14 +746,14 @@ siderolabs/pkgs (commit a92bed5, release-1.12)
                               ┌───────────────────────────────────┤
                               │    Local Registry / ghcr.io       │
                               │                                   │
-                              │  custom-installer:v1.12.6-…      │
+                              │  custom-installer:v1.13.0-rc.0-… │
                               │  nvidia-tegra-nvgpu:5.10.7-…     │
                               │  kernel-modules-clang:1.3.0-…    │
                               │  nvidia-firmware-ext:v5           │
                               └──────────────┬────────────────────┘
                                              │
                                              ▼
-                                   Talos Imager v1.12.6
+                                   Talos Imager v1.13.0-rc.0
                                              │
                               ┌──────────────┴──────────────┐
                               ▼                             ▼
@@ -767,8 +767,8 @@ the key generated during that specific kernel build. NVIDIA's `nvgpu` is an
 Out-of-Tree (OOT) module that must be compiled separately; it cannot be signed
 with Siderolabs' ephemeral build key.
 
-**Solution**: Build the kernel from the exact pkgs commit (`a92bed5`) that
-produced Talos v1.12.6, using a reproducible pre-generated key committed to
+**Solution**: Build the kernel from the exact pkgs commit (`b1215665`) that
+produced Talos v1.13.0-rc.0, using a reproducible pre-generated key committed to
 `keys/`. The custom filename `talos_signing_key.pem` prevents `make` from
 auto-regenerating a random key (see [BUGS.md — Bug 2](BUGS.md#bug-2--kernel-module-signing-key-reproducibility)).
 
@@ -782,10 +782,10 @@ patches to compile these against a standard upstream kernel.
 
 | Image | Tag | What's inside |
 |---|---|---|
-| `custom-installer` | `v1.12.6-6.18.18` | Official Talos installer + custom Clang vmlinuz (base, no extensions) |
-| `custom-installer` | `v1.12.6-6.18.18-nvgpu5.10.7` | **Full installer with all extensions** — use this for `talosctl upgrade` |
-| `nvidia-tegra-nvgpu` | `5.10.7-6.18.18-talos` | `nvgpu.ko` (NVHOST=n) + `nvhost-ctrl-shim.ko` (all CUDA ioctls, 30s SYNCPT floor) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
-| `kernel-modules-clang` | `1.3.0-6.18.18-talos` | Full Clang-compiled kernel module tree |
+| `custom-installer` | `v1.13.0-rc.0-6.18.22` | Official Talos installer + custom Clang vmlinuz (base, no extensions) |
+| `custom-installer` | `v1.13.0-rc.0-6.18.22-nvgpu5.10.7` | **Full installer with all extensions** — use this for `talosctl upgrade` |
+| `nvidia-tegra-nvgpu` | `5.10.7-6.18.22-talos` | `nvgpu.ko` (NVHOST=n) + `nvhost-ctrl-shim.ko` (all CUDA ioctls, 30s SYNCPT floor) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
+| `kernel-modules-clang` | `1.3.0-6.18.22-talos` | Full Clang-compiled kernel module tree |
 | `nvidia-firmware-ext` | `v5` | JetPack r36.5 firmware at `/usr/lib/firmware/ga10b/` incl. `pmu_pkc_prod_sig.bin` |
 
 ### Signing Key
@@ -819,9 +819,9 @@ documented in **[BUGS.md](BUGS.md)**.
 
 | Component | Version | Notes |
 |---|---|---|
-| Talos Linux | **v1.12.6** | pkgs commit `a92bed5`, branch `release-1.12` |
+| Talos Linux | **v1.13.0-rc.0** | pkgs commit `b1215665`, branch `release-1.13` |
 | Kubernetes | **v1.35.2** | |
-| Kernel | **6.18.18-talos** | Clang/LLVM build, reproducible module signing key |
+| Kernel | **6.18.22-talos** | Clang/LLVM build, reproducible module signing key |
 | LLVM/Clang | `v1.14.0-alpha.0` | `ghcr.io/siderolabs/llvm` |
 | OE4T linux-nvgpu | `d530a48` | patches-r36.5 — the GA10B GPU driver |
 | OE4T linux-nv-oot | `ccf7646` | NVIDIA OOT framework (nvmap, conftest, devfreq) |
@@ -862,7 +862,6 @@ Notable items relevant to day-to-day use:
 |---|---|---|
 | Signing key committed to repo | Anyone who clones the repo has the build key | It's a throw-away build key; each fork should regenerate via `00-setup-keys.sh --force` |
 | Undefined L4T symbols (`nvmap_dma_free_attrs`, `tegra_vpr_dev`) | Build warnings during `modpost` | Not called during CUDA compute; would oops if invoked — acceptable for this use case |
-| `install.extensions` deprecated in Talos v1.12 | Validation warning at apply time | Functional; migration to overlay installer planned for next Talos bump |
 | UBSAN: `netlist.c:617` at every boot | Non-fatal log noise | nvgpu 5.x upstream bug; GPU works normally — see [BUGS.md — Bug 9](BUGS.md#bug-9--ubsan-array-index-out-of-bounds-in-netlistc-non-fatal) |
 | `Can't initialize nvrm channel` in GPU container logs | Non-fatal warning | GPU channels are created successfully; inference works |
 | Single control-plane node | No etcd HA | By design; add worker nodes via separate `worker.yaml` to scale |
@@ -884,10 +883,10 @@ Contributions especially welcome for:
 
 ## 13. References
 
-- [Talos Linux v1.12 Documentation](https://www.talos.dev/v1.12/)
-- [Talos System Extensions Guide](https://www.talos.dev/v1.12/talos-guides/configuration/system-extensions/)
-- [Talos Boot Assets Guide](https://www.talos.dev/v1.12/talos-guides/install/boot-assets/)
-- [siderolabs/pkgs](https://github.com/siderolabs/pkgs) — Talos kernel build system (commit `a92bed5`)
+- [Talos Linux v1.13 Documentation](https://www.talos.dev/v1.13/)
+- [Talos System Extensions Guide](https://www.talos.dev/v1.13/talos-guides/configuration/system-extensions/)
+- [Talos Boot Assets Guide](https://www.talos.dev/v1.13/talos-guides/install/boot-assets/)
+- [siderolabs/pkgs](https://github.com/siderolabs/pkgs) — Talos kernel build system (commit `b1215665`)
 - [OE4T/linux-nvgpu](https://github.com/OE4T/linux-nvgpu) — nvgpu patches (commit `d530a48`)
 - [OE4T/linux-nv-oot](https://github.com/OE4T/linux-nv-oot) — NVIDIA OOT framework (commit `ea32e7f`)
 - [Seeed Studio reComputer J4012](https://www.seeedstudio.com/reComputer-J4012-p-5586.html) — hardware
