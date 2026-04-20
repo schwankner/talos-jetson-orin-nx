@@ -1,0 +1,207 @@
+name: Test pkgs-PR build
+
+# Validates that pkg.yaml.pkgs (the siderolabs/pkgs PR version) builds correctly.
+# Uses the same ARM64 runner and pkgs-clone infrastructure as build-extensions.yaml,
+# but injects pkg.yaml.pkgs (no signing key, no installer step, template vars) instead.
+#
+# What this validates:
+#   ✅ OE4T sources load (URLs + commits correct)
+#   ✅ All Clang patches apply
+#   ✅ host1x + host1x-fence + nvmap + nvhost-ctrl-shim + nvgpu build
+#   ✅ All .ko files are present in output
+#   ✅ bldr template vars ({{ .oe4t_* }}) resolve correctly
+#
+# What is NOT tested (irrelevant for pkgs PR):
+#   ⬜ Custom signing key (pkgs uses kernel-generated key — fine)
+#   ⬜ custom-installer rebuild (that lives in our CI, not in pkgs)
+#
+# Runtime: ~90 min cold / ~20 min with warm kernel cache.
+# Trigger: workflow_dispatch only — run manually before opening the siderolabs/pkgs PR.
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-pkgs-test:
+    name: Test pkgs-compatible nvidia-tegra-nvgpu build
+    runs-on: ubuntu-24.04-arm
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx (named talos-builder)
+        run: |
+          docker buildx create --name talos-builder --driver docker-container --use
+          docker buildx inspect talos-builder --bootstrap
+
+      - name: Clone siderolabs/pkgs at pinned commit
+        run: |
+          source scripts/common.sh
+          echo "Cloning siderolabs/pkgs @ ${PKGS_COMMIT} (branch ${PKGS_BRANCH})..."
+          git clone --filter=blob:none --single-branch --branch "${PKGS_BRANCH}" \
+            https://github.com/siderolabs/pkgs /tmp/talos-pkgs
+          cd /tmp/talos-pkgs && git checkout "${PKGS_COMMIT}"
+          echo "✓ talos-pkgs ready at $(git -C /tmp/talos-pkgs rev-parse --short HEAD)"
+
+          # Patch config-arm64: use talos_signing_key.pem (make won't auto-regenerate it)
+          sed -i 's|CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"|CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"|g' \
+            /tmp/talos-pkgs/kernel/build/config-arm64
+          grep "CONFIG_MODULE_SIG_KEY" /tmp/talos-pkgs/kernel/build/config-arm64
+
+      - name: Inject OE4T variables into pkgs Pkgfile
+        run: |
+          cd /tmp/talos-pkgs
+          # Inject our OE4T commit + checksum vars so bldr resolves {{ .oe4t_* }} templates.
+          # We insert after the "  vars:" line in the Pkgfile (preserving all formatting).
+          python3 << 'PYEOF'
+          import re, sys
+
+          with open('Pkgfile') as f:
+              content = f.read()
+
+          extra = (
+              "    oe4t_nvgpu_commit: d530a48d64f9ad3020d9f3307f53e8dde8e3fba1\n"
+              "    oe4t_nvgpu_sha256: adc5864edf76d986866e386803a9e628ee229e69ea34867b92b978a0b44f3d54\n"
+              "    oe4t_nvgpu_sha512: a7c7f0b5d3174bf41abc77c77009f46182358f93936aedbe4993e63ff7fc94e21bfd83c3fa0b41af5836866b9c200427504d8f26685d567c11722e7a7bfd3ed9\n"
+              "    oe4t_nv_oot_commit: ccf7646c57462776fe1093af6643c54653f59861\n"
+              "    oe4t_nv_oot_sha256: d1957d2c4908a37b4c040aef3a7413a9fbb3adcc8575cc9347c58af1c8b95169\n"
+              "    oe4t_nv_oot_sha512: 66b8b4a0672a2c044d42e58914a6d0000fc3a01f1343fa39190794e5badbcb52cd3c2254bd3ca2b6be86286dadbbe60db5cb26c74264747b783937443e287a33\n"
+              "    oe4t_hwpm_commit: 4d8a6998760d85f98637dbf61597bfbb88158206\n"
+              "    oe4t_hwpm_sha256: 96c7656bdad0bf330e7fd58981b8a4eec4717a76840cefbe84e720d88b46be55\n"
+              "    oe4t_hwpm_sha512: 971b91fcae284c59dbe411356109bce9b1a7884b8fac41c9683c79bf3eddef606e71ebaa9c06ad2389b2ba382c3c1125fabe0cbaeb5edac857e218077ed24ef9\n"
+          )
+
+          # Insert after the first "  vars:" line
+          patched = re.sub(r'(  vars:\n)', r'\1' + extra, content, count=1)
+          if patched == content:
+              print("WARNING: '  vars:' not found — trying 'vars:' at root level")
+              patched = re.sub(r'(^vars:\n)', r'\1' + extra.replace('    ', '  '), content, count=1, flags=re.MULTILINE)
+
+          if patched == content:
+              print("ERROR: could not inject OE4T vars into Pkgfile", file=sys.stderr)
+              print("Pkgfile head:", content[:500])
+              sys.exit(1)
+
+          with open('Pkgfile', 'w') as f:
+              f.write(patched)
+          print("✓ OE4T vars injected into Pkgfile")
+
+          # Verify the injection worked
+          assert 'oe4t_nvgpu_commit' in open('Pkgfile').read(), "Injection verification failed"
+          print("✓ Injection verified")
+          PYEOF
+
+      - name: Inject pkg.yaml.pkgs + nvhost_ctrl_shim.c into pkgs tree
+        run: |
+          # Create the nvidia-tegra-nvgpu package directory in pkgs
+          mkdir -p /tmp/talos-pkgs/nvidia-tegra-nvgpu
+
+          # Copy the PR-compatible pkg.yaml (no signing key injection, no installer step)
+          cp "${GITHUB_WORKSPACE}/nvidia-tegra-nvgpu/pkg.yaml.pkgs" \
+             /tmp/talos-pkgs/nvidia-tegra-nvgpu/pkg.yaml
+          echo "✓ pkg.yaml.pkgs injected as nvidia-tegra-nvgpu/pkg.yaml"
+
+          # Copy the shim source — bldr makes package-dir files available at /pkg/ during build
+          cp "${GITHUB_WORKSPACE}/nvhost-ctrl-shim/nvhost_ctrl_shim.c" \
+             /tmp/talos-pkgs/nvidia-tegra-nvgpu/nvhost_ctrl_shim.c
+          echo "✓ nvhost_ctrl_shim.c ($(wc -l < /tmp/talos-pkgs/nvidia-tegra-nvgpu/nvhost_ctrl_shim.c) lines) ready"
+
+          echo "Package directory:"
+          ls -la /tmp/talos-pkgs/nvidia-tegra-nvgpu/
+
+      - name: Build nvidia-tegra-nvgpu (pkgs-compatible)
+        run: |
+          source scripts/common.sh
+          cd /tmp/talos-pkgs
+
+          NVGPU_OUT=/tmp/nvgpu-pkgs-test-output
+          mkdir -p "${NVGPU_OUT}"
+          BUILD_LOG=/tmp/nvgpu-pkgs-test.log
+
+          # Use ghcr.io build cache (same as our production build — kernel cache hit = ~20 min)
+          CACHE_TAG_KERNEL="kernel-${TALOS_VERSION}-k${KERNEL_VERSION}"
+          CACHE_TAG_NVGPU="nvgpu-pkgs-test-k${KERNEL_VERSION}"
+          CACHE_REGISTRY="ghcr.io/${{ github.repository_owner }}/build-cache"
+
+          echo "=== Building nvidia-tegra-nvgpu (pkgs-compatible pkg.yaml) ==="
+          echo "    Talos ${TALOS_VERSION}, kernel ${KERNEL_VERSION}"
+          echo "    Cache registry: ${CACHE_REGISTRY}"
+
+          docker buildx build \
+            --builder talos-builder \
+            --file Pkgfile \
+            --target nvidia-tegra-nvgpu \
+            --platform linux/arm64 \
+            --cache-from "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU}" \
+            --cache-from "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_KERNEL}" \
+            --cache-to   "type=registry,ref=${CACHE_REGISTRY}:${CACHE_TAG_NVGPU},mode=min" \
+            --output "type=local,dest=${NVGPU_OUT}" \
+            . 2>&1 | tee "${BUILD_LOG}"
+        timeout-minutes: 120
+
+      - name: Verify build output
+        run: |
+          source scripts/common.sh
+          NVGPU_OUT=/tmp/nvgpu-pkgs-test-output
+          echo "=== Build output ==="
+          find "${NVGPU_OUT}" -name "*.ko" | sort
+
+          # Required modules
+          REQUIRED=(
+            "nvgpu.ko"
+            "host1x.ko"
+            "host1x-fence.ko"
+            "nvhost_ctrl_shim.ko"
+            "nvmap.ko"
+            "mc-utils.ko"
+          )
+          FAIL=0
+          for mod in "${REQUIRED[@]}"; do
+            if find "${NVGPU_OUT}" -name "${mod}" | grep -q .; then
+              echo "  ✓ ${mod}"
+            else
+              echo "  ✗ ${mod} MISSING"
+              FAIL=1
+            fi
+          done
+
+          # Check modprobe.d config
+          if [ -f "${NVGPU_OUT}/rootfs/usr/lib/modprobe.d/nvidia-tegra.conf" ]; then
+            echo "  ✓ modprobe.d/nvidia-tegra.conf"
+            cat "${NVGPU_OUT}/rootfs/usr/lib/modprobe.d/nvidia-tegra.conf"
+          else
+            echo "  ✗ modprobe.d/nvidia-tegra.conf MISSING"
+            FAIL=1
+          fi
+
+          # Check host1x installs at kernel/drivers/gpu/host1x/ (shadow path)
+          if find "${NVGPU_OUT}" -path "*/kernel/drivers/gpu/host1x/host1x.ko" | grep -q .; then
+            echo "  ✓ host1x.ko at kernel/drivers/gpu/host1x/ (shadow path correct)"
+          else
+            echo "  ✗ host1x.ko not at shadow path kernel/drivers/gpu/host1x/"
+            FAIL=1
+          fi
+
+          if [ "${FAIL}" -eq 0 ]; then
+            echo ""
+            echo "✓ All required modules present — pkg.yaml.pkgs is ready for upstream PR!"
+          else
+            echo ""
+            echo "✗ Some modules missing — fix pkg.yaml.pkgs before opening the PR."
+            exit 1
+          fi
