@@ -81,8 +81,10 @@ by ~4× (7 tok/s → 30 tok/s on qwen2.5:0.5b).
 The shim provides `/dev/nvhost-ctrl` with the full `NVHOST_IOCTL_CTRL_SYNCPT_WAITMEX` interface,
 allowing the CUDA driver to block on a kernel wait queue and be woken by a hardware interrupt
 when the GPU signals the syncpoint. This is how JetPack Ubuntu works — our shim brings the
-same behavior to a custom Talos kernel where the NVIDIA host1x driver (`CONFIG_TEGRA_GK20A_NVHOST`)
-is deliberately disabled (`=n`) to avoid the kernel module signing problem.
+same behavior to a custom Talos kernel. `CONFIG_TEGRA_GK20A_NVHOST=y` is set, but the in-tree
+`host1x.ko` is replaced by the OE4T version (which has `HOST1X_SYNCPT_GPU` support) via the
+extension overlay — the shim then provides the userspace `/dev/nvhost-ctrl` character device
+that `libnvrm_host1x.so` needs, which the OE4T tree does not ship.
 
 ### Comparison with official NVIDIA JetPack Ubuntu + Kubernetes
 
@@ -784,7 +786,7 @@ patches to compile these against a standard upstream kernel.
 |---|---|---|
 | `custom-installer` | `v1.13.0-rc.0-6.18.22` | Official Talos installer + custom Clang vmlinuz (base, no extensions) |
 | `custom-installer` | `v1.13.0-rc.0-6.18.22-nvgpu5.10.7` | **Full installer with all extensions** — use this for `talosctl upgrade` |
-| `nvidia-tegra-nvgpu` | `5.10.7-6.18.22-talos` | `nvgpu.ko` (NVHOST=n) + `nvhost-ctrl-shim.ko` (all CUDA ioctls, 30s SYNCPT floor) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
+| `nvidia-tegra-nvgpu` | `5.10.7-6.18.22-talos` | `nvgpu.ko` (NVHOST=y, OE4T host1x) + `nvhost-ctrl-shim.ko` (userspace /dev/nvhost-ctrl, all CUDA ioctls, 30s SYNCPT floor) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
 | `kernel-modules-clang` | `1.3.0-6.18.22-talos` | Full Clang-compiled kernel module tree |
 | `nvidia-firmware-ext` | `v5` | JetPack r36.5 firmware at `/usr/lib/firmware/ga10b/` incl. `pmu_pkc_prod_sig.bin` |
 
@@ -826,7 +828,7 @@ documented in **[BUGS.md](BUGS.md)**.
 | OE4T linux-nvgpu | `d530a48` | patches-r36.5 — the GA10B GPU driver |
 | OE4T linux-nv-oot | `ccf7646` | NVIDIA OOT framework (nvmap, conftest, devfreq) |
 | OE4T linux-hwpm | `4d8a699` | Hardware Performance Monitor |
-| `nvidia-tegra-nvgpu` ext | **5.10.7** | `NVHOST=n` + `nvhost-ctrl-shim` (all ioctls incl. POLL_FD_CREATE; SYNCPT_WAITMEX 30s floor fixes 7B+ model crashes) |
+| `nvidia-tegra-nvgpu` ext | **5.10.7** | `NVHOST=y` + OE4T host1x overlay + `nvhost-ctrl-shim` (userspace /dev/nvhost-ctrl; SYNCPT_WAITMEX 30s floor fixes 7B+ model crashes) |
 | `kernel-modules-clang` ext | **1.3.0** | Full Clang-compiled kernel module tree, signed with `talos_signing_key.pem` |
 | `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added; sourced from L4T r36.5 apt (`t234` repo) |
 
@@ -843,8 +845,8 @@ Notable items relevant to day-to-day use:
 
 | # | Issue | Impact | Status |
 |---|-------|--------|--------|
-| [Bug 6](BUGS.md#bug-6--cuda-error-999-cudastreamsynchronize--nvhost-syncpoint) | CUDA error 999 (`cudaStreamSynchronize`) | GPU compute fails | ✅ Fixed — `NVHOST=n` |
-| [Bug 14](BUGS.md#bug-14--cuda-error-999-persists-with-nvhosty-nvgpu-590--591) | CUDA error 999 with NVHOST=y (5.9.0/5.9.1) | GPU pool not signable | ✅ Diagnosed — NVHOST=n stable |
+| [Bug 6](BUGS.md#bug-6--cuda-error-999-cudastreamsynchronize--nvhost-syncpoint) | CUDA error 999 (`cudaStreamSynchronize`) | GPU compute fails | ✅ Fixed — OE4T host1x + `nvhost-ctrl-shim` |
+| [Bug 14](BUGS.md#bug-14--cuda-error-999-persists-with-nvhosty-nvgpu-590--591) | CUDA error 999 with NVHOST=y attempts 5.9.0–5.9.5 | GPU pool / L4T blocker | ✅ Solved — OE4T host1x overlay + shim (5.10.4+) |
 | [Bug 15](BUGS.md#bug-15--gpu-decode-speed-7-toks-cpu-polling-overhead-with-nvhostn) | GPU decode ~7 tok/s (CPU polling) | Slow inference | ✅ Fixed — `nvhost-ctrl-shim` SYNCPT_WAITMEX (5.10.4→**~16 tok/s**) + `pr_debug` (5.10.5→**~23 tok/s**) |
 | [Bug 16](BUGS.md) | Jetson boots from USB instead of NVMe after upgrade | `talosctl upgrade` silently ignored | ✅ Fixed — remove USB stick |
 | [Bug 17](BUGS.md) | nvhost-ctrl-shim missing SYNCPT_WAITMEX + GET_CHARACTERISTICS | CUDA error 999 with shim loaded | ✅ Fixed — implemented in nvhost_ctrl_shim.c (5.10.3) |
