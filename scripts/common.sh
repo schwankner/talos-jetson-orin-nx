@@ -15,11 +15,11 @@ CACHE_REGISTRY="${CACHE_REGISTRY:-}"  # set to ghcr.io/<owner>/build-cache in CI
 
 # ── Talos version ────────────────────────────────────────────────────────────
 # Tracked by Renovate — update-talos.yaml is no longer used (removed).
-TALOS_VERSION="${TALOS_VERSION:-v1.12.6}"
+TALOS_VERSION="${TALOS_VERSION:-v1.13.0-rc.0}"
 
 # ── siderolabs/pkgs pin (derived from TALOS_VERSION) ─────────────────────────
-PKGS_COMMIT="${PKGS_COMMIT:-a92bed5}"    # exact commit that produced Talos v1.12.6
-PKGS_BRANCH="${PKGS_BRANCH:-release-$(echo "${TALOS_VERSION}" | sed 's/^v//' | cut -d. -f1,2)}"
+PKGS_COMMIT="${PKGS_COMMIT:-b1215665}"   # latest commit on release-1.13 (2026-04-15)
+PKGS_BRANCH="${PKGS_BRANCH:-release-$(echo "${TALOS_VERSION}" | sed 's/^v//' | cut -d. -f1,2 | sed 's/-rc\..*//')}"
 
 # ── Kernel version — derived automatically from siderolabs/pkgs ──────────────
 # Reads linux_version from the same Pkgfile Talos uses to build its own kernel.
@@ -36,7 +36,7 @@ fi
 # These vars must be injected into siderolabs/pkgs/Pkgfile before building
 # (the official Pkgfile does not include them)
 LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
-LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
+LLVM_REV="${LLVM_REV:-v1.13.0-beta.0-3-gc192d81}"   # TOOLS_REV from pkgs release-1.13
 
 # ── Extension versions ───────────────────────────────────────────────────────
 NVGPU_VERSION="${NVGPU_VERSION:-5.10.7}"         # .../ 5.10.6 (feat: POLL_FD_CREATE nr=16) / 5.10.7 (fix: SYNCPT_WAITMEX min-timeout 30s, GA10B large-model kernel timeout)
@@ -74,11 +74,11 @@ check_registry() {
 }
 
 check_talosctl() {
-  # Prefer ~/bin/talosctl (manually installed v1.12.6) over Homebrew version
+  # Prefer ~/bin/talosctl (manually installed) over Homebrew version
   if [[ -x "${HOME}/bin/talosctl" ]]; then
     export PATH="${HOME}/bin:${PATH}"
   fi
-  command -v talosctl &>/dev/null || error "talosctl not found. Install v1.12.6: https://github.com/siderolabs/talos/releases/tag/v1.12.6"
+  command -v talosctl &>/dev/null || error "talosctl not found. Install ${TALOS_VERSION}: https://github.com/siderolabs/talos/releases/tag/${TALOS_VERSION}"
 }
 
 check_kubectl() {

@@ -192,8 +192,8 @@ INSTALLER_BUILD_DIR=$(mktemp -d)
 trap 'rm -rf "${INSTALLER_BUILD_DIR}"' EXIT
 
 cp "${VMLINUZ_SRC}" "${INSTALLER_BUILD_DIR}/vmlinuz.efi"
-cat > "${INSTALLER_BUILD_DIR}/Dockerfile" << 'IMGEOF'
-FROM ghcr.io/siderolabs/installer:v1.12.6
+cat > "${INSTALLER_BUILD_DIR}/Dockerfile" << IMGEOF
+FROM ghcr.io/siderolabs/installer:${TALOS_VERSION}
 COPY vmlinuz.efi /usr/install/arm64/vmlinuz.efi
 IMGEOF
 
@@ -220,7 +220,7 @@ metadata:
   description: NVIDIA nvgpu GPU driver for Jetson Orin NX (OE4T patches-r36.5, Clang build)
   compatibility:
     talos:
-      version: ">= 1.12.6"
+      version: ">= ${TALOS_VERSION#v}"
 EOF
 
   cat > "${EXT_BUILD_DIR}/Dockerfile" << 'EXTEOF'
@@ -256,7 +256,7 @@ metadata:
   description: In-tree kernel modules compiled with Clang and signed with the custom module signing key
   compatibility:
     talos:
-      version: ">= 1.12.6"
+      version: ">= ${TALOS_VERSION#v}"
 EOF
 
 cat > "${KM_BUILD_DIR}/Dockerfile" << 'KMEOF'

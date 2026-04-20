@@ -3,14 +3,14 @@
 #
 # This manifest relies on the Container Device Interface stack set up by:
 #
-#   manifests/gpu/cdi-setup.yaml      — writes /var/run/cdi/nvidia-jetson.yaml
+#   manifests/gpu/cdi-setup.yaml      — writes /run/cdi/nvidia-jetson.yaml
 #   manifests/gpu/device-plugin.yaml  — exposes nvidia.com/gpu resource
 #   manifests/talos/machine-patch-cdi.yaml — enables CDI in containerd
 #
 # How it works:
 #   1. Pod requests resources.limits.nvidia.com/gpu: "1"
 #   2. nvidia-device-plugin AllocateResponse returns CDI device ID "nvidia.com/gpu=0"
-#   3. containerd reads /var/run/cdi/nvidia-jetson.yaml and automatically injects:
+#   3. containerd reads /run/cdi/nvidia-jetson.yaml and automatically injects:
 #        • All nvgpu + nvhost device nodes
 #        • /var/lib/nvidia-tegra-libs/tegra → /usr/lib/aarch64-linux-gnu/nvidia (bind)
 #        • LD_LIBRARY_PATH pointing at the JetPack r36.5 libs
@@ -77,7 +77,7 @@ spec:
         app: ollama
       annotations:
         # CDI pod annotation — tells containerd 2.x to inject the CDI device "nvidia.com/gpu=0"
-        # from the spec at /var/run/cdi/nvidia-jetson.yaml.  This injects all nvgpu + nvhost
+        # from the spec at /run/cdi/nvidia-jetson.yaml.  This injects all nvgpu + nvhost
         # device nodes, the JetPack r36.5 library bind-mount, and LD_LIBRARY_PATH automatically.
         # The device plugin (nvidia.com/gpu resource) handles Kubernetes scheduling;
         # this annotation handles the actual containerd-level device + lib injection.

@@ -13,7 +13,7 @@
 #   3. Creates /dev/nvhost-ctrl symlink → /dev/nvgpu/igpu0/ctrl
 #      (JetPack 6 libcuda.so.1.1 requires this during cuInit)
 #
-#   4. Writes /var/run/cdi/nvidia-jetson.yaml — the CDI spec containerd reads
+#   4. Writes /run/cdi/nvidia-jetson.yaml — the CDI spec containerd reads
 #      when a pod requests nvidia.com/gpu.  The spec is generated dynamically
 #      so it only lists device nodes that actually exist on this host.
 #
@@ -89,12 +89,12 @@ data:
   # ── cdi-writer.sh ─────────────────────────────────────────────────────────
   # Runs in the long-lived container: sets up firmware, device symlinks, device
   # permissions, and writes the CDI spec.  Loops every 60 s to regenerate the
-  # spec if /var/run is cleared (tmpfs reset after host reboot).
+  # spec if /run/cdi is cleared (tmpfs reset after host reboot).
   cdi-writer.sh: |
     #!/bin/sh
     set -e
 
-    CDI_DIR=/var/run/cdi
+    CDI_DIR=/run/cdi
     CDI_SPEC="${CDI_DIR}/nvidia-jetson.yaml"
     FW_SRC=/host-firmware/ga10b
     FW_DEST=/host-var/fw-fresh/ga10b
@@ -194,7 +194,7 @@ data:
     write_cdi_spec
     echo "[cdi-setup] Setup complete — entering watch loop (60 s interval)"
 
-    # ── Watch loop: regenerate spec if /var/run is cleared ─────────────────
+    # ── Watch loop: regenerate spec if /run/cdi is cleared ─────────────────
     while true; do
       sleep 60
       if [ ! -f "${CDI_SPEC}" ]; then
@@ -264,7 +264,7 @@ spec:
             - name: host-var
               mountPath: /host-var
             - name: cdi-dir
-              mountPath: /var/run/cdi
+              mountPath: /run/cdi
             - name: scripts
               mountPath: /scripts
 
@@ -287,7 +287,7 @@ spec:
             path: /var
         - name: cdi-dir
           hostPath:
-            path: /var/run/cdi
+            path: /run/cdi
             type: DirectoryOrCreate
         - name: scripts
           configMap:

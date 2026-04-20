@@ -7,7 +7,7 @@
 # Usage:
 #   ./scripts/gen-config.sh
 #   NODE_IP=10.0.10.38 ./scripts/gen-config.sh
-#   INSTALL_IMAGE=ghcr.io/schwankner/custom-installer:v1.12.6-6.18.18 ./scripts/gen-config.sh
+#   INSTALL_IMAGE=ghcr.io/schwankner/custom-installer:v1.13.0-rc.0-6.18.22-nvgpu5.10.7 ./scripts/gen-config.sh
 #
 # After generating:
 #   1. Boot Jetson from USB stick (maintenance mode)
