@@ -49,11 +49,11 @@ bash "$(dirname "$0")/setup-keys.sh"
 
 # ── Step 2: Verify talos-pkgs is set up ──────────────────────────────────────
 [[ -d "${TALOS_PKGS_DIR}/nvidia-tegra-nvgpu" ]] \
-  || error "talos-pkgs not found at ${TALOS_PKGS_DIR}. Clone siderolabs/pkgs@a92bed5 there first."
+  || error "talos-pkgs not found at ${TALOS_PKGS_DIR}. Clone siderolabs/pkgs@${PKGS_COMMIT} there first."
 [[ -f "${TALOS_PKGS_DIR}/Pkgfile" ]] \
   || error "Pkgfile missing from ${TALOS_PKGS_DIR}."
 [[ -f "${TALOS_PKGS_DIR}/kernel/build/config-arm64" ]] \
-  || error "kernel/build/config-arm64 missing. Fetch from siderolabs/pkgs@a92bed5."
+  || error "kernel/build/config-arm64 missing. Fetch from siderolabs/pkgs@${PKGS_COMMIT}."
 
 # Ensure config-arm64 uses talos_signing_key.pem (make won't auto-regenerate it)
 # Auto-patch if the official signing_key.pem name is still present

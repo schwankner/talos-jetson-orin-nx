@@ -217,7 +217,7 @@ jobs:
           cp -r "${GA10B_SRC}" "${EXT_DIR}/rootfs/usr/lib/firmware/ga10b"
 
           # Use printf to avoid YAML-indentation contaminating the file contents
-          printf 'version: v1alpha1\nmetadata:\n  name: nvidia-firmware-ext\n  version: %s\n  author: custom-build\n  description: NVIDIA GA10B firmware from JetPack r36.5 (pmu_pkc_prod_sig.bin + friends)\n  compatibility:\n    talos:\n      version: ">= 1.12.6"\n' \
+          printf 'version: v1alpha1\nmetadata:\n  name: nvidia-firmware-ext\n  version: %s\n  author: custom-build\n  description: NVIDIA GA10B firmware from JetPack r36.5 (pmu_pkc_prod_sig.bin + friends)\n  compatibility:\n    talos:\n      version: ">= 1.13.0"\n' \
             "${FIRMWARE_EXT_TAG}" > "${EXT_DIR}/manifest.yaml"
 
           printf 'FROM scratch\nCOPY manifest.yaml /manifest.yaml\nCOPY rootfs /rootfs\n' \
