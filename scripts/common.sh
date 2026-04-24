@@ -15,7 +15,7 @@ CACHE_REGISTRY="${CACHE_REGISTRY:-}"  # set to ghcr.io/<owner>/build-cache in CI
 
 # ── Talos version ────────────────────────────────────────────────────────────
 # Tracked by Renovate — update-talos.yaml is no longer used (removed).
-TALOS_VERSION="${TALOS_VERSION:-v1.12.6}"
+TALOS_VERSION="${TALOS_VERSION:-1.12.7}"
 
 # ── siderolabs/pkgs pin (derived from TALOS_VERSION) ─────────────────────────
 PKGS_COMMIT="${PKGS_COMMIT:-a92bed5}"    # exact commit that produced Talos v1.12.6
