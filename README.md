@@ -45,7 +45,7 @@ that uses the CDI path instead of NVML:
    - All `/dev/nvgpu/igpu0/*` device nodes
    - `/dev/nvmap` (GPU memory allocator)
    - `/dev/nvhost-ctrl` (syncpoint wait — provided by `nvhost-ctrl-shim`)
-   - JetPack r36.5 library bind-mount → `/usr/lib/aarch64-linux-gnu/nvidia`
+   - JetPack r36.4+ library bind-mount → `/usr/lib/aarch64-linux-gnu/nvidia`
    - `LD_LIBRARY_PATH` pointing at the real CUDA libraries
 
 The CDI spec is written dynamically at boot by the `nvidia-cdi-setup` DaemonSet, so it always
@@ -212,14 +212,15 @@ sudo dd if=talos-usb-nvgpu5.10.7.raw of=/dev/sdX bs=4M status=progress && sync
 
 #### Prerequisites
 
-> ⚠️ **JetPack 6.2 (L4T r36.5) must be present on the Jetson before installing this image.**
+> ⚠️ **JetPack r36.4 or later must be present on the Jetson before installing this image.**
 >
-> The GPU firmware files (`pmu_pkc_prod_sig.bin` and friends) are sourced from JetPack r36.5.
-> Older JetPack versions (6.1 / r36.4 or earlier) will cause the nvgpu driver to fail at firmware load.
+> The GPU firmware files (`pmu_pkc_prod_sig.bin` and friends) are sourced from the JetPack apt
+> repositories. Tested with **36.4.3-gcid-38968081** (JetPack 6.1 / L4T r36.4) — newer versions
+> are not required. For boards where no newer firmware is available (e.g. Seeed Studio reComputer
+> J4012), r36.4.x is sufficient.
 >
-> Jetsons ship with JetPack pre-installed. If yours already runs JetPack 6.2 (r36.5), proceed directly
-> to [Boot & Install](#boot--install). If it runs an older version, update to JetPack 6.2 first using
-> [NVIDIA SDK Manager](https://developer.nvidia.com/sdk-manager).
+> Jetsons ship with JetPack pre-installed. If yours already runs r36.4 or later, proceed directly
+> to [Boot & Install](#boot--install).
 
 #### Generate a machine config
 
@@ -276,8 +277,8 @@ your machine config, etcd state, and Kubernetes workloads intact.
 
 #### Prerequisites
 
-- JetPack 6.2 (L4T r36.5) must have been flashed at some point — the GPU firmware it writes
-  to the Jetson's eMMC persists across Talos upgrades.
+- JetPack r36.4 or later must have been flashed at some point — the GPU firmware it writes
+  to the Jetson's eMMC persists across Talos upgrades. Tested with 36.4.3-gcid-38968081.
 - `talosctl` v1.12.x and a working `talosconfig` for the node.
 
 #### Upgrade command
@@ -786,7 +787,7 @@ patches to compile these against a standard upstream kernel.
 | `custom-installer` | `v1.12.6-6.18.18-nvgpu5.10.7` | **Full installer with all extensions** — use this for `talosctl upgrade` |
 | `nvidia-tegra-nvgpu` | `5.10.7-6.18.18-talos` | `nvgpu.ko` (NVHOST=n) + `nvhost-ctrl-shim.ko` (all CUDA ioctls, 30s SYNCPT floor) + `nvmap.ko` + `governor_pod_scaling.ko` + friends |
 | `kernel-modules-clang` | `1.3.0-6.18.18-talos` | Full Clang-compiled kernel module tree |
-| `nvidia-firmware-ext` | `v5` | JetPack r36.5 firmware at `/usr/lib/firmware/ga10b/` incl. `pmu_pkc_prod_sig.bin` |
+| `nvidia-firmware-ext` | `v5` | JetPack r36.4+ firmware at `/usr/lib/firmware/ga10b/` incl. `pmu_pkc_prod_sig.bin` (tested: 36.4.3-gcid-38968081) |
 
 ### Signing Key
 
@@ -828,7 +829,7 @@ documented in **[BUGS.md](BUGS.md)**.
 | OE4T linux-hwpm | `4d8a699` | Hardware Performance Monitor |
 | `nvidia-tegra-nvgpu` ext | **5.10.7** | `NVHOST=n` + `nvhost-ctrl-shim` (all ioctls incl. POLL_FD_CREATE; SYNCPT_WAITMEX 30s floor fixes 7B+ model crashes) |
 | `kernel-modules-clang` ext | **1.3.0** | Full Clang-compiled kernel module tree, signed with `talos_signing_key.pem` |
-| `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added; sourced from L4T r36.5 apt (`t234` repo) |
+| `nvidia-firmware-ext` | **v5** | `pmu_pkc_prod_sig.bin` added; sourced from L4T r36.4+ apt (`t234` repo, tested: 36.4.3-gcid-38968081) |
 
 ---
 
