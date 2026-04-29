@@ -192,10 +192,8 @@ INSTALLER_BUILD_DIR=$(mktemp -d)
 trap 'rm -rf "${INSTALLER_BUILD_DIR}"' EXIT
 
 cp "${VMLINUZ_SRC}" "${INSTALLER_BUILD_DIR}/vmlinuz.efi"
-cat > "${INSTALLER_BUILD_DIR}/Dockerfile" << 'IMGEOF'
-FROM ghcr.io/siderolabs/installer:v1.12.6
-COPY vmlinuz.efi /usr/install/arm64/vmlinuz.efi
-IMGEOF
+printf 'FROM ghcr.io/siderolabs/installer:%s\nCOPY vmlinuz.efi /usr/install/arm64/vmlinuz.efi\n' \
+  "${TALOS_VERSION}" > "${INSTALLER_BUILD_DIR}/Dockerfile"
 
 docker buildx build \
   --platform linux/arm64 \
