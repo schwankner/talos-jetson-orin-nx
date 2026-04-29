@@ -32,11 +32,10 @@ if [ -z "${KERNEL_VERSION:-}" ]; then
   [ -z "${KERNEL_VERSION}" ] && { echo "[ERROR] Could not determine kernel version from pkgs/${PKGS_BRANCH}" >&2; exit 1; }
 fi
 
-# ── Custom LLVM build used by nvidia-tegra-nvgpu/pkg.yaml ────────────────────
-# These vars must be injected into siderolabs/pkgs/Pkgfile before building
-# (the official Pkgfile does not include them)
-LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"
-LLVM_REV="${LLVM_REV:-v1.14.0-alpha.0}"
+# ── LLVM (Talos 1.13+) ──────────────────────────────────────────────────────
+# LLVM_IMAGE and TOOLS_REV are defined in siderolabs/pkgs/Pkgfile (release-1.13+)
+# and used directly by nvidia-tegra-nvgpu/pkg.yaml. No injection into Pkgfile needed.
+LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"  # informational only
 
 # ── Extension versions ───────────────────────────────────────────────────────
 NVGPU_VERSION="${NVGPU_VERSION:-5.10.7}"         # .../ 5.10.6 (feat: POLL_FD_CREATE nr=16) / 5.10.7 (fix: SYNCPT_WAITMEX min-timeout 30s, GA10B large-model kernel timeout)

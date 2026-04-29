@@ -4,7 +4,7 @@ shell: /bin/bash
 dependencies:
   - stage: base
   - stage: kernel-build
-  - image: "{{ .LLVM_IMAGE }}:{{ .LLVM_REV }}"
+  - image: "{{ .LLVM_IMAGE }}:{{ .TOOLS_REV }}"
 steps:
   - sources:
       # OE4T patched nvgpu - supports kernel 6.x (fixes platform_driver.remove, hrtimer, struct fd)

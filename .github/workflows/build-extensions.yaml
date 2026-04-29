@@ -114,9 +114,9 @@ jobs:
              /tmp/talos-pkgs/kernel-modules-clang/pkg.yaml
           echo "✓ kernel-modules-clang/pkg.yaml injected"
 
-          # Patch Pkgfile: inject custom LLVM vars needed by nvidia-tegra-nvgpu/pkg.yaml
-          # (the official siderolabs/pkgs Pkgfile does not define LLVM_IMAGE / LLVM_REV)
-          python3 -c "c=open('/tmp/talos-pkgs/Pkgfile').read();c=c.replace('vars:\n','vars:\n  LLVM_IMAGE: ghcr.io/siderolabs/llvm\n  LLVM_REV: v1.14.0-alpha.0\n\n',1);open('/tmp/talos-pkgs/Pkgfile','w').write(c);print('Pkgfile patched with LLVM_IMAGE / LLVM_REV')"
+          # Note: LLVM_IMAGE and TOOLS_REV are already defined in siderolabs/pkgs
+          # Pkgfile (release-1.13+) — no injection needed. nvidia-tegra-nvgpu/pkg.yaml
+          # references {{ .LLVM_IMAGE }}:{{ .TOOLS_REV }} directly from the Pkgfile vars.
 
           # Patch config-arm64: use talos_signing_key.pem (make won't auto-regenerate it)
           sed -i 's|CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"|CONFIG_MODULE_SIG_KEY="certs/talos_signing_key.pem"|g' \
