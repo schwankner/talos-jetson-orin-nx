@@ -75,6 +75,10 @@ steps:
           >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
         printf 'ccflags-y += -I$(srctree.nvidia-oot)/drivers/gpu/host1x/include\n' \
           >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
+        # Make LINUX_VERSION_CODE + KERNEL_VERSION() available — not auto-included by the
+        # kernel build system; needed by our LINUX_VERSION_CODE guards below.
+        printf 'ccflags-y += -include $(srctree)/include/linux/version.h\n' \
+          >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
 
         # Replace conftest-guarded macros with LINUX_VERSION_CODE guards (host1x).
         # Root cause for #if 1 workarounds: NV_CONFTEST_CFLAGS hardcodes -Werror;
@@ -131,6 +135,9 @@ steps:
         printf 'ccflags-y += -DNV_MM_STRUCT_STRUCT_HAS_PERCPU_COUNTER_RSS_STAT\n' \
           >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
         printf 'ccflags-y += -DNV_IOREMAP_PROT_HAS_PGPROT_T_ARG\n' \
+          >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
+        # Make LINUX_VERSION_CODE + KERNEL_VERSION() available for the guards below.
+        printf 'ccflags-y += -include $(srctree)/include/linux/version.h\n' \
           >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
 
         # mc-utils: add nvidia-oot includes (for mc_utils.h, hv-ivc.h)
@@ -325,9 +332,9 @@ steps:
           | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0) /* vm_flags const since v6.3 (bc292ab00f6c) */|g"
         echo "Patched all nvgpu files: always use vm_flags_set on kernel 6.3+"
         # Clang 18+ treats several warnings as errors — suppress globally
-        sed -i '1s|^|ccflags-y += -Wno-implicit-fallthrough -Wno-parentheses-equality -Wno-incompatible-function-pointer-types -Wno-sometimes-uninitialized\n|' \
+        sed -i '1s|^|ccflags-y += -Wno-implicit-fallthrough -Wno-parentheses-equality -Wno-incompatible-function-pointer-types -Wno-sometimes-uninitialized\nccflags-y += -include $(srctree)/include/linux/version.h\n|' \
           /oot-src/nvgpu/drivers/gpu/nvgpu/Makefile
-        echo "Patched nvgpu Makefile: disabled clang compat warnings"
+        echo "Patched nvgpu Makefile: disabled clang compat warnings + added version.h include"
         # class_create(THIS_MODULE, name) -> class_create(name) in kernel 6.4+
         grep -rl "class_create(THIS_MODULE," /oot-src/nvgpu/drivers/gpu/nvgpu/ \
           | xargs -r sed -i 's/class_create(THIS_MODULE, /class_create(/g'
