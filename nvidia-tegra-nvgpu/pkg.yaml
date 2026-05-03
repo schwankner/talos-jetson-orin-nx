@@ -48,6 +48,15 @@ steps:
         echo "nvhost-ctrl-shim source ready ($(wc -l < /oot-src/nvhost-ctrl-shim/nvhost_ctrl_shim.c) lines)"
     build:
       - |
+        echo "=== DEBUG: searching for linux/version.h in build container ==="
+        find /src -name "version.h" 2>/dev/null || echo "(none found under /src)"
+        find /usr -name "version.h" 2>/dev/null | head -20 || true
+        ls /src/include/linux/version.h 2>/dev/null && echo "EXISTS: /src/include/linux/version.h" || echo "MISSING: /src/include/linux/version.h"
+        ls /src/include/generated/uapi/linux/version.h 2>/dev/null && echo "EXISTS: generated/uapi path" || echo "MISSING: generated/uapi path"
+        echo "srctree candidates: KBUILD_OUTPUT/include:"
+        ls /src/include/ | head -30 || true
+        echo "=== end DEBUG ==="
+      - |
         echo "Building NVIDIA conftest (kernel compat detection)..."
         mkdir -p /oot-src/out/nvidia-conftest/nvidia /oot-src/out/nvidia-linux-header
 
