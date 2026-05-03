@@ -33,7 +33,7 @@
 machine:
   install:
     disk: /dev/nvme0n1
-    image: ghcr.io/schwankner/custom-installer:v1.13.0-6.18.24-nvgpu5.10.8
+    image: ghcr.io/schwankner/custom-installer:v1.13.0-6.18.24-nvgpu5.10.9
     wipe: false
   kernel:
     modules:

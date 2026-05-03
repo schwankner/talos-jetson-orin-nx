@@ -38,7 +38,7 @@ fi
 LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"  # informational only
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.10.8}"         # .../ 5.10.7 (fix: SYNCPT_WAITMEX min-timeout 30s, GA10B large-model kernel timeout) / 5.10.8 (chore: switch linux-nv-oot to stable patches-r36.5)
+NVGPU_VERSION="${NVGPU_VERSION:-5.10.9}"         # .../ 5.10.7 (fix: SYNCPT_WAITMEX min-timeout 30s, GA10B large-model kernel timeout) / 5.10.8 (chore: switch linux-nv-oot to stable patches-r36.5) / 5.10.9 (chore: remove dead code from fixup.sh — kref_init already upstream, GCC plugin block unreachable with LLVM=1)
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 
