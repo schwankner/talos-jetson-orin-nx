@@ -68,15 +68,6 @@ steps:
         NVIDIA_OOT=/oot-src/nvidia-oot
         CONFTEST_OUT=/oot-src/out/nvidia-conftest
 
-        # ── GCC plugin latent_entropy fix ────────────────────────────────────────────
-        # CONFIG_GCC_PLUGIN_LATENT_ENTROPY injects a global 'latent_entropy' variable
-        # via a GCC plugin. Clang doesn't run the plugin → 'latent_entropy' is undeclared
-        # → linux/random.h:24 compile error for ALL OOT modules.
-        # Fix: strip the macro from auto.conf and autoconf.h before any OOT build.
-        sed -i '/CONFIG_GCC_PLUGIN_LATENT_ENTROPY/d' /src/include/config/auto.conf 2>/dev/null || true
-        sed -i '/CONFIG_GCC_PLUGIN_LATENT_ENTROPY/d' /src/include/generated/autoconf.h 2>/dev/null || true
-        echo "Removed CONFIG_GCC_PLUGIN_LATENT_ENTROPY (Clang compat fix)"
-
         # OOT host1x: add conftest + nvidia-oot includes (exports host1x_fence_extract)
         printf 'ccflags-y += -I$(srctree.nvconftest)\n' \
           >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
@@ -84,45 +75,25 @@ steps:
           >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
         printf 'ccflags-y += -I$(srctree.nvidia-oot)/drivers/gpu/host1x/include\n' \
           >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
-
-        # Force conftest macros for OOT host1x on kernel 6.18
-        # iommu_map has gfp arg since 6.3
+        # Force conftest macros for OOT host1x on kernel 6.18.
+        # Root cause: NV_CONFTEST_CFLAGS in OE4T conftest/Makefile hardcodes -Werror;
+        # Clang is stricter than GCC → conftest compile tests fail → macros undefined →
+        # wrong code path. Force the correct 6.18-compatible path unconditionally.
+        # Note: LINUX_VERSION_CODE guards are not viable here — linux/version.h is not
+        # installed in the siderolabs kernel build container's /src include tree.
         grep -rl "NV_IOMMU_MAP_HAS_GFP_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
           | xargs -r sed -i "s|#if defined(NV_IOMMU_MAP_HAS_GFP_ARG)|#if 1 /* force: kernel 6.3+ */|g"
-        # iommu_paging_domain_alloc present since 6.11
         grep -rl "NV_IOMMU_PAGING_DOMAIN_ALLOC_PRESENT" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
           | xargs -r sed -i "s|#if defined(NV_IOMMU_PAGING_DOMAIN_ALLOC_PRESENT)|#if 1 /* force: kernel 6.11+ */|g"
-        # devm_tegra_core_dev_init_opp_table_common present
         grep -rl "NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
           | xargs -r sed -i "s|#if defined(NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT)|#if 1 /* force: present */|g"
-        # platform_driver.remove is void since 6.11
         grep -rl "NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
           | xargs -r sed -i "s|#if defined(NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)|#if 1 /* force: kernel 6.11+ */|g"
-        # bus_type.match has const driver arg since 6.x
         grep -rl "NV_BUS_TYPE_STRUCT_MATCH_HAS_CONST_DRV_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
           | xargs -r sed -i "s|#if defined(NV_BUS_TYPE_STRUCT_MATCH_HAS_CONST_DRV_ARG)|#if 1 /* force: kernel 6.x+ */|g"
-        # bus_type.uevent has const dev arg since 6.x
         grep -rl "NV_BUS_TYPE_STRUCT_UEVENT_HAS_CONST_DEV_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
           | xargs -r sed -i "s|#if defined(NV_BUS_TYPE_STRUCT_UEVENT_HAS_CONST_DEV_ARG)|#if 1 /* force: kernel 6.x+ */|g"
         echo "Patched OOT host1x: forced conftest macro code paths for kernel 6.18"
-
-        # host1x syncpt.c: permanently reserve syncpt id=0 so host1x_syncpt_alloc never returns it.
-        # GA10b has NVGPU_ERRATA_SYNCPT_INVALID_ID_0: nvgpu rejects id=0 → channel init fails → error 999.
-        # OOT host1x (ccf7646c) marks syncpt[0] with name="reserved" but does NOT set kref=1, so the
-        # alloc loop (which skips syncpts where kref_read(&sp->ref) != 0) still returns id=0.
-        # Fix: add kref_init(&syncpt[0].ref) before the name assignment, matching what newer OE4T
-        # commits already do (e.g. 6e071c0). Guard is idempotent — safe even if already present.
-        SYNCPT_C=${NVIDIA_OOT}/drivers/gpu/host1x/syncpt.c
-        if grep -q 'syncpt\[0\]\.name = kstrdup' "${SYNCPT_C}" 2>/dev/null; then
-          if ! grep -q 'kref_init.*syncpt\[0\]' "${SYNCPT_C}" 2>/dev/null; then
-            sed -i 's/\(syncpt\[0\]\.name = kstrdup("reserved", GFP_KERNEL);\)/kref_init(\&syncpt[0].ref);\n\t\t\1/' "${SYNCPT_C}"
-            echo "Patched host1x syncpt.c: added kref_init(&syncpt[0].ref) — id=0 permanently reserved"
-          else
-            echo "host1x syncpt.c: kref_init(&syncpt[0].ref) already present — no patch needed"
-          fi
-        else
-          echo "WARNING: host1x syncpt.c pattern not found — syncpt id=0 reservation patch skipped"
-        fi
 
         # host1x-fence: remove -Werror, add conftest + nvidia-oot includes
         # host1x-next.h lives in drivers/gpu/host1x/include/linux/ within nvidia-oot
@@ -160,7 +131,6 @@ steps:
           >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
         printf 'ccflags-y += -DNV_IOREMAP_PROT_HAS_PGPROT_T_ARG\n' \
           >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
-
         # mc-utils: add nvidia-oot includes (for mc_utils.h, hv-ivc.h)
         printf 'ccflags-y += -I$(srctree.nvidia-oot)/include\n' \
           >> ${NVIDIA_OOT}/drivers/platform/tegra/mc-utils/Makefile
@@ -175,39 +145,28 @@ steps:
 
         echo "Include paths patched into OOT module Makefiles."
 
-        # Force conftest macro paths in nvmap source for kernel 6.18.
-        # The conftest probes for these macros don't fire on this kernel+Clang combo,
-        # so we hardcode the kernel 6.x code paths directly (same technique as nvgpu).
-        # get_user_pages: 5-arg -> 4-arg since 6.5 (NV_GET_USER_PAGES_HAS_ARGS_FLAGS)
+        # Force conftest macro paths in nvmap source for kernel 6.18
         grep -rl "NV_GET_USER_PAGES_HAS_ARGS_FLAGS" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
           | xargs -r sed -i "s|#if defined(NV_GET_USER_PAGES_HAS_ARGS_FLAGS)|#if 1 /* force: kernel 6.5+ */|g"
-        # mm->rss_stat is percpu_counter array since 6.2 (NV_MM_STRUCT_STRUCT_HAS_PERCPU_COUNTER_RSS_STAT)
         grep -rl "NV_MM_STRUCT_STRUCT_HAS_PERCPU_COUNTER_RSS_STAT" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
           | xargs -r sed -i "s|#if defined(NV_MM_STRUCT_STRUCT_HAS_PERCPU_COUNTER_RSS_STAT)|#if 1 /* force: kernel 6.2+ */|g"
-        # ioremap_prot takes pgprot_t directly since 6.15 (NV_IOREMAP_PROT_HAS_PGPROT_T_ARG)
         grep -rl "NV_IOREMAP_PROT_HAS_PGPROT_T_ARG" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
           | xargs -r sed -i "s|#if defined(NV_IOREMAP_PROT_HAS_PGPROT_T_ARG)|#if 1 /* force: kernel 6.15+ */|g"
-        # vm_flags became const in 6.3; use vm_flags_set() (NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)
         grep -rl "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
           | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if 1 /* force: kernel 6.3+ */|g"
-        # __assign_str took single arg since 6.10 (NV___ASSIGN_STR_HAS_NO_SRC_ARG)
         grep -rl "NV___ASSIGN_STR_HAS_NO_SRC_ARG" \
             ${NVIDIA_OOT}/include/trace/events/ \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ 2>/dev/null \
           | xargs -r sed -i "s|#if defined(NV___ASSIGN_STR_HAS_NO_SRC_ARG)|#if 1 /* force: kernel 6.10+ */|g"
-        # __alloc_pages_bulk dropped page_list arg in 6.14 (NV__ALLOC_PAGES_BULK_HAS_NO_PAGE_LIST_ARG)
         grep -rl "NV__ALLOC_PAGES_BULK_HAS_NO_PAGE_LIST_ARG" \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
           | xargs -r sed -i "s|#if defined(NV__ALLOC_PAGES_BULK_HAS_NO_PAGE_LIST_ARG)|#if 1 /* force: kernel 6.14+ */|g"
-        # struct file replaced f_count with f_ref in 6.13 (NV_FILE_STRUCT_HAS_F_REF)
         grep -rl "NV_FILE_STRUCT_HAS_F_REF" \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
           | xargs -r sed -i "s|#if defined(NV_FILE_STRUCT_HAS_F_REF)|#if 1 /* force: kernel 6.13+ */|g"
-        # get_file_rcu takes double pointer (struct file __rcu **) since 6.7
         grep -rl "NV_GET_FILE_RCU_HAS_DOUBLE_PTR_FILE_ARG" \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
           | xargs -r sed -i "s|#if defined(NV_GET_FILE_RCU_HAS_DOUBLE_PTR_FILE_ARG)|#if 1 /* force: kernel 6.7+ */|g"
-        # platform_driver.remove is void since 6.11 (NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)
         grep -rl "NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID" \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
           | xargs -r sed -i "s|#if defined(NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)|#if 1 /* force: kernel 6.11+ */|g"
@@ -396,14 +355,6 @@ steps:
           sed -i 's/struct netlist_region regions\[1\]/struct netlist_region regions[]/' "${NETLIST_PRIV}"
           echo "Patched netlist_priv.h: regions[1] → regions[] (silences UBSAN false positive)"
         fi
-        # ── Disable GCC-only plugin configs in auto.conf before make ─────────────
-        # CONFIG_GCC_PLUGIN_LATENT_ENTROPY: the plugin injects a 'latent_entropy'
-        # global variable declaration; without the plugin Clang can't find it.
-        # -U on the command line doesn't help because -include autoconf.h fires
-        # AFTER command-line -U flags and re-defines the macro. Patch the file.
-        sed -i '/CONFIG_GCC_PLUGIN_LATENT_ENTROPY/d' /src/include/config/auto.conf 2>/dev/null || true
-        sed -i '/CONFIG_GCC_PLUGIN_LATENT_ENTROPY/d' /src/include/generated/autoconf.h 2>/dev/null || true
-        echo "Removed CONFIG_GCC_PLUGIN_LATENT_ENTROPY from auto.conf + autoconf.h"
         make -j $(nproc) ARCH=arm64 \
           -C /src \
           M=/oot-src/nvgpu/drivers/gpu/nvgpu \
