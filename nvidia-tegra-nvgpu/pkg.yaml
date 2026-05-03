@@ -75,30 +75,25 @@ steps:
           >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
         printf 'ccflags-y += -I$(srctree.nvidia-oot)/drivers/gpu/host1x/include\n' \
           >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
-        # Make LINUX_VERSION_CODE + KERNEL_VERSION() available — not auto-included by the
-        # kernel build system; needed by our LINUX_VERSION_CODE guards below.
-        printf 'ccflags-y += -include $(srctree)/include/linux/version.h\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
-
-        # Replace conftest-guarded macros with LINUX_VERSION_CODE guards (host1x).
-        # Root cause for #if 1 workarounds: NV_CONFTEST_CFLAGS hardcodes -Werror;
-        # Clang is stricter than GCC → some compile tests fail → macros not defined.
-        # LINUX_VERSION_CODE is compiler-agnostic and version-correct for kernel 6.18.
-        # Commit refs: iommu_map gfp=6.3(1369459b), iommu_paging=6.11, bus_type match=6.8
-        # (d69d80484598), bus_type uevent=6.3(2a81ada32f0e), platform_driver void=6.11(0edb555a65d1)
+        # Force conftest macros for OOT host1x on kernel 6.18.
+        # Root cause: NV_CONFTEST_CFLAGS in OE4T conftest/Makefile hardcodes -Werror;
+        # Clang is stricter than GCC → conftest compile tests fail → macros undefined →
+        # wrong code path. Force the correct 6.18-compatible path unconditionally.
+        # Note: LINUX_VERSION_CODE guards are not viable here — linux/version.h is not
+        # installed in the siderolabs kernel build container's /src include tree.
         grep -rl "NV_IOMMU_MAP_HAS_GFP_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_IOMMU_MAP_HAS_GFP_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0) /* iommu_map: gfp arg since v6.3 */|g"
+          | xargs -r sed -i "s|#if defined(NV_IOMMU_MAP_HAS_GFP_ARG)|#if 1 /* force: kernel 6.3+ */|g"
         grep -rl "NV_IOMMU_PAGING_DOMAIN_ALLOC_PRESENT" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_IOMMU_PAGING_DOMAIN_ALLOC_PRESENT)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,11,0) /* iommu_paging_domain_alloc since v6.11 */|g"
+          | xargs -r sed -i "s|#if defined(NV_IOMMU_PAGING_DOMAIN_ALLOC_PRESENT)|#if 1 /* force: kernel 6.11+ */|g"
         grep -rl "NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT)|#if 1 /* devm_tegra_core_dev_init_opp_table_common: always present in OE4T */|g"
+          | xargs -r sed -i "s|#if defined(NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT)|#if 1 /* force: present */|g"
         grep -rl "NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,11,0) /* platform_driver.remove void since v6.11 */|g"
+          | xargs -r sed -i "s|#if defined(NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)|#if 1 /* force: kernel 6.11+ */|g"
         grep -rl "NV_BUS_TYPE_STRUCT_MATCH_HAS_CONST_DRV_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_BUS_TYPE_STRUCT_MATCH_HAS_CONST_DRV_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,0) /* bus_type.match const drv since v6.8 (d69d80484598) */|g"
+          | xargs -r sed -i "s|#if defined(NV_BUS_TYPE_STRUCT_MATCH_HAS_CONST_DRV_ARG)|#if 1 /* force: kernel 6.x+ */|g"
         grep -rl "NV_BUS_TYPE_STRUCT_UEVENT_HAS_CONST_DEV_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_BUS_TYPE_STRUCT_UEVENT_HAS_CONST_DEV_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0) /* bus_type.uevent const dev since v6.3 (2a81ada32f0e) */|g"
-        echo "Patched OOT host1x: LINUX_VERSION_CODE guards (compiler-agnostic)"
+          | xargs -r sed -i "s|#if defined(NV_BUS_TYPE_STRUCT_UEVENT_HAS_CONST_DEV_ARG)|#if 1 /* force: kernel 6.x+ */|g"
+        echo "Patched OOT host1x: forced conftest macro code paths for kernel 6.18"
 
         # host1x-fence: remove -Werror, add conftest + nvidia-oot includes
         # host1x-next.h lives in drivers/gpu/host1x/include/linux/ within nvidia-oot
@@ -136,10 +131,6 @@ steps:
           >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
         printf 'ccflags-y += -DNV_IOREMAP_PROT_HAS_PGPROT_T_ARG\n' \
           >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
-        # Make LINUX_VERSION_CODE + KERNEL_VERSION() available for the guards below.
-        printf 'ccflags-y += -include $(srctree)/include/linux/version.h\n' \
-          >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
-
         # mc-utils: add nvidia-oot includes (for mc_utils.h, hv-ivc.h)
         printf 'ccflags-y += -I$(srctree.nvidia-oot)/include\n' \
           >> ${NVIDIA_OOT}/drivers/platform/tegra/mc-utils/Makefile
@@ -154,36 +145,32 @@ steps:
 
         echo "Include paths patched into OOT module Makefiles."
 
-        # Replace conftest-guarded macros with LINUX_VERSION_CODE guards (nvmap).
-        # Commit refs: get_user_pages 4-arg=6.5, rss_stat percpu=6.2(f1a7941243c1),
-        # ioremap_prot pgprot=6.15(86758b504864), vm_flags const=6.3(bc292ab00f6c),
-        # __assign_str 1-arg=6.10, __alloc_pages_bulk no-list=6.14(c8b979530f27),
-        # f_ref=6.13(90ee6ed776c0), get_file_rcu dbl-ptr=6.7(0ede61d8589cc2), remove void=6.11
+        # Force conftest macro paths in nvmap source for kernel 6.18
         grep -rl "NV_GET_USER_PAGES_HAS_ARGS_FLAGS" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_GET_USER_PAGES_HAS_ARGS_FLAGS)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,5,0) /* get_user_pages: vmas arg removed since v6.5 */|g"
+          | xargs -r sed -i "s|#if defined(NV_GET_USER_PAGES_HAS_ARGS_FLAGS)|#if 1 /* force: kernel 6.5+ */|g"
         grep -rl "NV_MM_STRUCT_STRUCT_HAS_PERCPU_COUNTER_RSS_STAT" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_MM_STRUCT_STRUCT_HAS_PERCPU_COUNTER_RSS_STAT)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,2,0) /* mm->rss_stat percpu_counter since v6.2 (f1a7941243c1) */|g"
+          | xargs -r sed -i "s|#if defined(NV_MM_STRUCT_STRUCT_HAS_PERCPU_COUNTER_RSS_STAT)|#if 1 /* force: kernel 6.2+ */|g"
         grep -rl "NV_IOREMAP_PROT_HAS_PGPROT_T_ARG" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_IOREMAP_PROT_HAS_PGPROT_T_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,15,0) /* ioremap_prot pgprot_t since v6.15 (86758b504864) */|g"
+          | xargs -r sed -i "s|#if defined(NV_IOREMAP_PROT_HAS_PGPROT_T_ARG)|#if 1 /* force: kernel 6.15+ */|g"
         grep -rl "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0) /* vm_flags const since v6.3 (bc292ab00f6c) */|g"
+          | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if 1 /* force: kernel 6.3+ */|g"
         grep -rl "NV___ASSIGN_STR_HAS_NO_SRC_ARG" \
             ${NVIDIA_OOT}/include/trace/events/ \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ 2>/dev/null \
-          | xargs -r sed -i "s|#if defined(NV___ASSIGN_STR_HAS_NO_SRC_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,10,0) /* __assign_str 1-arg since v6.10 */|g"
+          | xargs -r sed -i "s|#if defined(NV___ASSIGN_STR_HAS_NO_SRC_ARG)|#if 1 /* force: kernel 6.10+ */|g"
         grep -rl "NV__ALLOC_PAGES_BULK_HAS_NO_PAGE_LIST_ARG" \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV__ALLOC_PAGES_BULK_HAS_NO_PAGE_LIST_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,14,0) /* __alloc_pages_bulk no page_list since v6.14 (c8b979530f27) */|g"
+          | xargs -r sed -i "s|#if defined(NV__ALLOC_PAGES_BULK_HAS_NO_PAGE_LIST_ARG)|#if 1 /* force: kernel 6.14+ */|g"
         grep -rl "NV_FILE_STRUCT_HAS_F_REF" \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_FILE_STRUCT_HAS_F_REF)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,13,0) /* struct file f_ref since v6.13 (90ee6ed776c0) */|g"
+          | xargs -r sed -i "s|#if defined(NV_FILE_STRUCT_HAS_F_REF)|#if 1 /* force: kernel 6.13+ */|g"
         grep -rl "NV_GET_FILE_RCU_HAS_DOUBLE_PTR_FILE_ARG" \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_GET_FILE_RCU_HAS_DOUBLE_PTR_FILE_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,0) /* get_file_rcu dbl-ptr since v6.7 (0ede61d8589cc2) */|g"
+          | xargs -r sed -i "s|#if defined(NV_GET_FILE_RCU_HAS_DOUBLE_PTR_FILE_ARG)|#if 1 /* force: kernel 6.7+ */|g"
         grep -rl "NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID" \
             ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,11,0) /* platform_driver.remove void since v6.11 (0edb555a65d1) */|g"
-        echo "Patched nvmap: LINUX_VERSION_CODE guards (compiler-agnostic)"
+          | xargs -r sed -i "s|#if defined(NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)|#if 1 /* force: kernel 6.11+ */|g"
+        echo "Patched nvmap: forced conftest macro code paths for kernel 6.18"
       - |
         # ── Cross-compiler mismatch fix: Clang wrapper (definitive) ─────────────
         # Previous attempts (patching auto.conf, CONFIG_CC_IS_GCC= on make cmdline)
@@ -329,12 +316,12 @@ steps:
         # ── nvgpu source patches ─────────────────────────────────────────────────────
         # Kernel 6.18 compat: always use vm_flags_set (conftest fails in 6.12+)
         grep -rl "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" /oot-src/nvgpu/drivers/gpu/nvgpu/ \
-          | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0) /* vm_flags const since v6.3 (bc292ab00f6c) */|g"
+          | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if 1 /* force: kernel 6.3+ */|g"
         echo "Patched all nvgpu files: always use vm_flags_set on kernel 6.3+"
         # Clang 18+ treats several warnings as errors — suppress globally
-        sed -i '1s|^|ccflags-y += -Wno-implicit-fallthrough -Wno-parentheses-equality -Wno-incompatible-function-pointer-types -Wno-sometimes-uninitialized\nccflags-y += -include $(srctree)/include/linux/version.h\n|' \
+        sed -i '1s|^|ccflags-y += -Wno-implicit-fallthrough -Wno-parentheses-equality -Wno-incompatible-function-pointer-types -Wno-sometimes-uninitialized\n|' \
           /oot-src/nvgpu/drivers/gpu/nvgpu/Makefile
-        echo "Patched nvgpu Makefile: disabled clang compat warnings + added version.h include"
+        echo "Patched nvgpu Makefile: disabled clang compat warnings"
         # class_create(THIS_MODULE, name) -> class_create(name) in kernel 6.4+
         grep -rl "class_create(THIS_MODULE," /oot-src/nvgpu/drivers/gpu/nvgpu/ \
           | xargs -r sed -i 's/class_create(THIS_MODULE, /class_create(/g'
