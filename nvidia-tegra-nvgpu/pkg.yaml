@@ -31,31 +31,28 @@ steps:
       # Clang-built kernel those probes fail wholesale and every NV_* macro stays
       # undefined. The kernel build itself ignores CC when LLVM=1.
       CC: clang
-      # The OE4T top-level Makefiles add these include paths for every module; we
-      # build the module directories individually, so pass them globally instead.
-      # The -Wno-* flags cover warnings Clang raises in the OE4T sources.
+      # The OE4T top-level Makefiles add these include paths for every module; the
+      # module directories are built individually here, so pass them globally.
       KCFLAGS: >-
         -I/oot-src/out/nvidia-conftest
         -I/oot-src/nvidia-oot/include
         -I/oot-src/nvidia-oot/drivers/gpu/host1x/include
         -I/oot-src/nvidia-oot/drivers/video/tegra/nvmap/include
-        -I/oot-src/hwpm/include
-        -Wno-unknown-warning-option -Wno-enum-enum-conversion -Wno-implicit-fallthrough
-        -Wno-gnu-variable-sized-type-not-at-end -Wno-parentheses-equality
-        -Wno-incompatible-function-pointer-types -Wno-sometimes-uninitialized
     prepare:
       - |
         for t in nvgpu nvidia-oot hwpm; do
           mkdir -p /oot-src/$t
           tar xzf $t.tar.gz -C /oot-src/$t --strip-components=1
-          for p in /pkg/patches/$t/*.patch; do patch -p1 -d /oot-src/$t < $p; done
         done
+        # patches/<tree>/*.patch applies to /oot-src/<tree>
+        for p in /pkg/patches/*/*.patch; do t=${p%/*}; patch -p1 -d /oot-src/${t##*/} < $p; done
     build:
       - |
-        # conftest probes the kernel API and writes nvidia/conftest.h, which selects
-        # code paths in every module. Its Makefile hardcodes -Werror; under Clang
-        # several probes emit warnings GCC does not, so they would fail and leave
-        # their macro undefined. Only a real compile error may fail a probe.
+        # conftest probes the kernel API and writes conftest/*.h, which selects the
+        # code paths in every module (see CC above). Its Makefile hardcodes -Werror,
+        # which turns Clang-only warnings into failed probes: 26 of 129 macros go
+        # missing (measured), e.g. NV___ASSIGN_STR_HAS_NO_SRC_ARG, and one inverted
+        # "function present" probe reports the wrong answer.
         CONFTEST=/oot-src/out/nvidia-conftest/nvidia
         mkdir -p $CONFTEST
         cp -a /oot-src/nvidia-oot/scripts/conftest/. $CONFTEST/
@@ -76,8 +73,7 @@ steps:
           make -j$(nproc) -C /src M=$1 "${@:2}" modules \
             CONFIG_TEGRA_OOT_MODULE=m ccflags-remove-y=-Werror \
             srctree.nvidia-oot=$OOT srctree.nvidia=$OOT srctree.nvconftest=/oot-src/out/nvidia-conftest \
-            srctree.hwpm=/oot-src/hwpm srctree.nvgpu=/oot-src/nvgpu \
-            KBUILD_EXTRA_SYMBOLS=$SYMS
+            srctree.hwpm=/oot-src/hwpm KBUILD_EXTRA_SYMBOLS=$SYMS
           cat $1/Module.symvers >> $SYMS
         }
 
@@ -86,13 +82,13 @@ steps:
         oot $OOT/drivers/gpu/host1x-fence
         oot $OOT/drivers/gpu/host1x-nvhost
         oot /oot-src/hwpm/drivers/tegra/hwpm
-        # headless: render node only, no display outputs, no fbdev
-        oot $OOT/drivers/gpu/drm/tegra CONFIG_DRM_TEGRA_HAVE_DISPLAY=n CONFIG_DRM_FBDEV_EMULATION=n
-        oot $OOT/drivers/video/tegra/nvmap NVMAP_CONFIG=y NVMAP_CONFIG_LOADABLE_MODULE=y \
-          NVMAP_CONFIG_PAGE_POOLS=y NVMAP_CONFIG_HANDLE_AS_ID=n NVMAP_CONFIG_SCIIPC=n
+        # headless: no fbdev (the kernel config has it enabled, so it must be forced off)
+        oot $OOT/drivers/gpu/drm/tegra CONFIG_DRM_FBDEV_EMULATION=n
+        # the OE4T defaults for 5.10+ are handle-as-id and NvSciIpc support, neither is wanted here
+        oot $OOT/drivers/video/tegra/nvmap NVMAP_CONFIG_HANDLE_AS_ID=n NVMAP_CONFIG_SCIIPC=n
         oot $OOT/drivers/devfreq
-        oot /oot-src/nvgpu/drivers/gpu/nvgpu CONFIG_GK20A=m CONFIG_TEGRA_GK20A_NVHOST=y \
-          CONFIG_TEGRA_GK20A_NVHOST_HOST1X=y CONFIG_TEGRA_HWPM=n KBUILD_MODPOST_WARN=1
+        # syncpoints through the OE4T host1x (the kernel has neither GRHOST nor HOST1X_NEXT)
+        oot /oot-src/nvgpu/drivers/gpu/nvgpu CONFIG_TEGRA_GK20A_NVHOST=y CONFIG_TEGRA_GK20A_NVHOST_HOST1X=y
     install:
       - |
         OOT=/oot-src/nvidia-oot
