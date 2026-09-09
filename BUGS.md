@@ -1174,15 +1174,21 @@ firmware behaviour, not the new extension. Earlier version upgrades (1.13 → 1.
 because the new version sorts first.
 
 **Consequences / workaround**:
-- Any extension-only change on this hardware needs one manual step: select the `~N` entry in the
-  sd-boot menu at boot (5 s timeout, keyboard on the UEFI console). Once the node runs from `~N`,
-  the next `talosctl upgrade` deletes the bare-named UKI (cleanup keeps only the booted entry)
-  and writes `~N+1`, which sd-boot then sorts first, so same-version upgrades work from that point
-  on. The trap returns once after every Talos version bump (new bare `Talos-vX.efi`).
-- `talosctl upgrade --wait` is a false positive for this case; always verify with
-  `talosctl get extensions` (and `talosctl read /sys/firmware/efi/efivars/LoaderEntrySelected-...`).
-- Upstream: Talos could additionally write `default Talos-vX~N.efi` into `loader.conf` on the EFI
-  partition (which does persist) instead of relying on the EFI variable alone.
+- The new UKI has to be selected once by hand in the sd-boot menu (5 s timeout, keyboard on the
+  UEFI console); it is the second `Talos v1.14.0` entry. After that the node runs the new extension.
+- A second upgrade run from that boot does **not** make it automatic. Measured on the running node:
+  the upgrade first repoints the default to the booted entry (`talos-v1.14.0~4.efi`, because the
+  stale default differed) and that write **did** survive the reboot, while the final write naming
+  the freshly installed `Talos-v1.14.0~5.efi` did **not** — sd-boot listed `~5` first but the
+  persisted default still said `~4`, so it booted `~4` again. On this firmware the last variable
+  write before a reset is the one that gets lost, so every extension-only upgrade needs the manual
+  menu selection.
+- `talosctl upgrade --wait` reports `post check passed` regardless; always verify with
+  `talosctl get extensions` and
+  `talosctl read /sys/firmware/efi/efivars/LoaderEntrySelected-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f`.
+- Upstream ideas: write `default Talos-vX~N.efi` into `loader.conf` on the EFI partition (which is
+  a file and does persist), or delete the superseded UKI so a stale default matches no file and
+  sd-boot falls back to its own ordering, which already puts the highest `~N` first.
 
 **Validation (2026-09-09)**: after selecting `talos-v1.14.0~4.efi` once in the sd-boot menu the node
 ran extension 5.12.0: `/dev/dri` card0/card1/renderD128, all ten OOT modules loaded with new

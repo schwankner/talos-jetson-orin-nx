@@ -238,8 +238,8 @@ ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.12.0-drm-noshim
 > version stays the same, the installer writes the new UKI as `Talos-vX.Y.Z~N.efi` and selects it via
 > the `LoaderEntryDefault` EFI variable. Jetson UEFI 36.4.3 does not persist that runtime write, so
 > sd-boot boots the old UKI and `talosctl upgrade` still reports success. Verify with
-> `talosctl get extensions`; if the old version is still running, pick the `~N` entry once in the
-> sd-boot menu at boot, then run the same upgrade again to make it stick. Details in
+> `talosctl get extensions`; if the old version is still running, pick the highest `~N` entry in the
+> sd-boot menu at boot. This stays necessary for every extension-only upgrade. Details in
 > [BUGS.md](BUGS.md#bug-25--same-version-talosctl-upgrade-never-boots-the-new-uki-on-jetson-uefi-reports-success-anyway).
 
 ---
