@@ -3,7 +3,7 @@
 [![Talos](https://img.shields.io/badge/Talos-v1.14.0-blue)](https://github.com/siderolabs/talos/releases/tag/v1.14.0)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.37.0-blue)](https://kubernetes.io/)
 [![Kernel](https://img.shields.io/badge/kernel-6.18.48--talos-orange)](https://github.com/siderolabs/pkgs)
-[![nvgpu](https://img.shields.io/badge/nvgpu-5.11.1--drm-green)](https://github.com/OE4T/linux-nvgpu)
+[![nvgpu](https://img.shields.io/badge/nvgpu-5.12.0--drm-green)](https://github.com/OE4T/linux-nvgpu)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 [![Build](https://github.com/schwankner/talos-jetson-orin/actions/workflows/release.yaml/badge.svg)](https://github.com/schwankner/talos-jetson-orin/actions/workflows/release.yaml)
 
@@ -222,7 +222,7 @@ source scripts/common.sh
 
 **Custom installer image** (for `talosctl upgrade`):
 ```
-ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.11.1-drm-noshim
+ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.12.0-drm-noshim
 ```
 
 > **Talos ≥ 1.14:** `ghcr.io/siderolabs/installer` is no longer published — released installers
@@ -234,6 +234,14 @@ ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.11.1-drm-noshim
 > `UnattendedInstallConfig` and `EtcFileConfig` documents, but still work unchanged; migrating them
 > is tracked separately.
 
+> **Same-version upgrades on Jetson UEFI (Bug 25):** when only the extension changes and the Talos
+> version stays the same, the installer writes the new UKI as `Talos-vX.Y.Z~N.efi` and selects it via
+> the `LoaderEntryDefault` EFI variable. Jetson UEFI 36.4.3 does not persist that runtime write, so
+> sd-boot boots the old UKI and `talosctl upgrade` still reports success. Verify with
+> `talosctl get extensions`; if the old version is still running, pick the highest `~N` entry in the
+> sd-boot menu at boot. This stays necessary for every extension-only upgrade. Details in
+> [BUGS.md](BUGS.md#bug-25--same-version-talosctl-upgrade-never-boots-the-new-uki-on-jetson-uefi-reports-success-anyway).
+
 ---
 
 ## Versions
@@ -243,7 +251,7 @@ ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.11.1-drm-noshim
 | Talos Linux | v1.14.0 |
 | Kubernetes | v1.37.0 |
 | Linux kernel | 6.18.48-talos |
-| nvidia-tegra-nvgpu extension | 5.11.1-drm-noshim |
+| nvidia-tegra-nvgpu extension | 5.12.0-drm-noshim |
 | JetPack libs (userspace) | r36.5.0 |
 | Ollama | 0.20.5 |
 
@@ -300,10 +308,10 @@ kubectl logs -n nvidia-system -l app=jetson-power-mode | grep "cur_freq"
 ### `cuInit` returns 801 (CUDA_ERROR_NOT_SUPPORTED)
 
 This was the root cause before the DRM fix was applied. With the current extension
-(`nvgpu5.11.1-drm-noshim`), this should not occur. Verify the correct extension is loaded:
+(`nvgpu5.12.0-drm-noshim`), this should not occur. Verify the correct extension is loaded:
 ```bash
 talosctl get extensions --nodes <jetson-ip> | grep nvgpu
-# Expected: nvidia-tegra-nvgpu  5.11.1-drm-noshim-6.18.48-talos
+# Expected: nvidia-tegra-nvgpu  5.12.0-drm-noshim-6.18.48-talos
 ```
 
 ---

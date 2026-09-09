@@ -709,6 +709,9 @@ archived here as documentation for future reference.
 | **5.10.4** | **shim** | **pkg.yaml pin updated to correct commit — interrupt-driven wait active** | **✅** | **~16 tok/s** |
 | **5.10.5** | **shim** | **pr_info → pr_debug in hot path (SYNCPT_WAITMEX fired 100s×/s → kernel log overhead removed)** | **✅** | **~23 tok/s** |
 | **5.10.6** | **shim** | **POLL_FD_CREATE (nr=16, 0x80084810) via anon_inode_getfd — eliminates unknown-ioctl warning** | **✅** | **~23 tok/s** |
+| 5.11.0 | drm | Full OE4T DRM stack (tegra-drm + host1x-nvhost + nvhwpm), no shim — tegra-drm.ko only in extra/, vanilla in-tree one wins | ❌ no /dev/dri | — |
+| 5.11.1 | drm | tegra-drm.ko + host1x.ko also installed at the in-tree shadow paths → /dev/dri/renderD128, CUDA via DRM render node | ✅ | ~66 tok/s |
+| 5.12.0 | drm | pkg.yaml 624→127 lines: patch files, KCFLAGS, conftest with CC=clang (all NV_* macros real), no clang-oot wrapper (Bug 24) | ✅ | 66.0 tok/s (qwen2.5:0.5b), 16.5 (qwen3:4b) |
 
 ### Resolution
 
@@ -1119,3 +1122,77 @@ was `v1.14.0` → `v1.13.10` → `v1.12.12`, so by the next daily run "latest" h
 `major.minor.patch` (`sort -t. -k1,1n -k2,2n -k3,3n`). A first attempt embedded a multi-line
 Python snippet inside the YAML `run: |` block; unindented lines inside a block scalar break the
 YAML, so the pure `sort`-based version was used instead.
+
+## Bug 24 — OE4T conftest Probed the Clang Kernel Headers With GCC (Root Cause of the ~30 Macro Rewrites)
+
+**Symptom**: Every `NV_*` compat macro produced by the OE4T conftest (`scripts/conftest/`) came out
+undefined on the Talos kernel. The build compensated with ~30 `sed` rewrites turning
+`#if defined(NV_...)` into `LINUX_VERSION_CODE` guards (host1x, nvmap, host1x-nvhost, hwpm,
+tegra-drm, nvgpu). The pkgs review (frezbo, 2026-09-09) asked whether the wrapper and the huge
+fixup script could go.
+
+**Root cause**: `scripts/conftest/Makefile` uses `CC ?= cc`, and `cc` in the build image is
+**GCC 16.2**. Every probe was compiled with GCC against the headers of a kernel built with Clang 22
+(`CONFIG_CC_IS_CLANG=y`). Those probes fail wholesale, so each macro stays undefined and the
+sources take the wrong branch, e.g. host1x `cdma.c` calls `iommu_map()` with five arguments
+(`NV_IOMMU_MAP_HAS_GFP_ARG` missing). The conftest prints this as
+`Warning: Compiler version check failed ... *** Failed CC version check. ***` and then carries on.
+`-Werror` in `NV_CONFTEST_CFLAGS` was only a secondary problem. Verified by logging each probe's
+compiler output in a diagnostic run (34351661179): with `CC=clang` every probe compiles as
+intended (the `too few arguments` errors are the deliberate inverted logic of the `functions`
+probes).
+
+**Fix** (branch `chore/simplify-oot-build`): `CC: clang` in the package `env:` (the kernel build
+ignores `CC` when `LLVM=1`), `-Werror` dropped from the conftest Makefile, and an assertion that
+`NV_IOMMU_MAP_HAS_GFP_ARG` is defined (results live in `conftest/{functions,types,...}.h`, not
+`conftest.h`, and the category comes from the Makefile list, not from the script argument).
+All macro rewrites, the `clang-oot` CC wrapper and every Makefile edit are gone: include paths and
+Clang warning suppressions go through `KCFLAGS`, `-Werror` is filtered with
+`ccflags-remove-y=-Werror` on the make command line, and the six real source fixes are plain
+patch files under `nvidia-tegra-nvgpu/patches/`. `pkg.yaml` shrank from 624 to 127 lines; the
+build (34352832690) links all ten modules with zero errors. Extension version bumped to
+`5.12.0-drm-noshim` so the known-good 5.11.1 images stay on ghcr.
+
+## Bug 25 — Same-Version `talosctl upgrade` Never Boots the New UKI on Jetson UEFI (Reports Success Anyway)
+
+**Symptom**: `talosctl upgrade --image ...custom-installer:v1.14.0-...-nvgpu5.12.0-drm-noshim --wait`
+finishes with `post check passed`, the node comes back Ready, but `talosctl get extensions` still
+shows the previous extension (5.11.1). Three runs, identical result.
+
+**Analysis**: The Talos version stays v1.14.0, so the installer cannot name the new UKI
+`Talos-v1.14.0.efi` (that file is the running one). `generateNextUKIName()` in
+`bootloader/sdboot/sdboot.go` writes it as `Talos-v1.14.0~N.efi` and points the EFI variable
+`LoaderEntryDefault` at it. systemd-boot orders entries with `strverscmp_improved`, where `~`
+means "pre-release", so without an effective default the bare name always wins over `~N`.
+Polling the variable once per second around the upgrade showed the write does reach the kernel
+(`Talos-v1.14.0~4.efi` visible in efivarfs at 13:51:03), but after the reboot the firmware
+(Jetson UEFI `36.4.3-gcid-38968081`) reports the old value `Talos-v1.14.0.efi` again: the runtime
+write of this non-volatile variable is not persisted. sd-boot therefore boots the old UKI, Talos
+sees a healthy node and `DropUpgradeFallbackController` removes the META upgrade tag, so nothing
+ever complains. An A/B run with the known-good 5.11.1 installer behaves identically, so this is
+firmware behaviour, not the new extension. Earlier version upgrades (1.13 → 1.14) only worked
+because the new version sorts first.
+
+**Consequences / workaround**:
+- The new UKI has to be selected once by hand in the sd-boot menu (5 s timeout, keyboard on the
+  UEFI console); it is the second `Talos v1.14.0` entry. After that the node runs the new extension.
+- A second upgrade run from that boot does **not** make it automatic. Measured on the running node:
+  the upgrade first repoints the default to the booted entry (`talos-v1.14.0~4.efi`, because the
+  stale default differed) and that write **did** survive the reboot, while the final write naming
+  the freshly installed `Talos-v1.14.0~5.efi` did **not** — sd-boot listed `~5` first but the
+  persisted default still said `~4`, so it booted `~4` again. On this firmware the last variable
+  write before a reset is the one that gets lost, so every extension-only upgrade needs the manual
+  menu selection.
+- `talosctl upgrade --wait` reports `post check passed` regardless; always verify with
+  `talosctl get extensions` and
+  `talosctl read /sys/firmware/efi/efivars/LoaderEntrySelected-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f`.
+- Upstream ideas: write `default Talos-vX~N.efi` into `loader.conf` on the EFI partition (which is
+  a file and does persist), or delete the superseded UKI so a stale default matches no file and
+  sd-boot falls back to its own ordering, which already puts the highest `~N` first.
+
+**Validation (2026-09-09)**: after selecting `talos-v1.14.0~4.efi` once in the sd-boot menu the node
+ran extension 5.12.0: `/dev/dri` card0/card1/renderD128, all ten OOT modules loaded with new
+srcversions, no GPU errors in dmesg, Ollama `library=CUDA compute=8.7`, models 100 % VRAM-resident,
+qwen2.5:0.5b 64.7/66.0/66.0 tok/s and qwen3:4b 16.5 tok/s (references 65–66 and 16.4), GPU at
+918 MHz under load. The simplified build is therefore functionally identical to 5.11.1.
+
