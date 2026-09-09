@@ -51,7 +51,7 @@ fi
 LLVM_IMAGE="${LLVM_IMAGE:-ghcr.io/siderolabs/llvm}"  # informational only
 
 # ── Extension versions ───────────────────────────────────────────────────────
-NVGPU_VERSION="${NVGPU_VERSION:-5.11.1-drm-noshim}" # OE4T full DRM stack: tegra-drm.ko + host1x-nvhost.ko + nvhwpm.ko → /dev/dri/renderD128 → CUDA works
+NVGPU_VERSION="${NVGPU_VERSION:-5.12.0-drm-noshim}" # OE4T DRM stack (tegra-drm + host1x-nvhost + nvhwpm) → /dev/dri/renderD128 → CUDA; 5.12: patch files + KCFLAGS, conftest without -Werror
 FIRMWARE_EXT_TAG="${FIRMWARE_EXT_TAG:-v5}"        # v1 / v2 / v3 / v4 / v5 (pmu_pkc_prod_sig.bin added)
 KERNEL_MODULES_VERSION="${KERNEL_MODULES_VERSION:-1.3.0}"
 

@@ -27,597 +27,94 @@ steps:
       ARCH: arm64
       LLVM: "1"
       LLVM_IAS: "1"
+      # The OE4T top-level Makefiles add these include paths for every module; we
+      # build the module directories individually, so pass them globally instead.
+      # The -Wno-* flags cover warnings Clang raises in the OE4T sources.
+      KCFLAGS: >-
+        -I/oot-src/out/nvidia-conftest
+        -I/oot-src/nvidia-oot/include
+        -I/oot-src/nvidia-oot/drivers/gpu/host1x/include
+        -I/oot-src/nvidia-oot/drivers/video/tegra/nvmap/include
+        -I/oot-src/hwpm/include
+        -Wno-unknown-warning-option -Wno-enum-enum-conversion -Wno-implicit-fallthrough
+        -Wno-gnu-variable-sized-type-not-at-end -Wno-parentheses-equality
+        -Wno-incompatible-function-pointer-types -Wno-sometimes-uninitialized
     prepare:
       - |
-        echo "Extracting OE4T patched OOT module sources..."
-        mkdir -p /oot-src/nvgpu /oot-src/nvidia-oot /oot-src/hwpm
-        tar xzf nvgpu.tar.gz -C /oot-src/nvgpu --strip-components=1
-        tar xzf nvidia-oot.tar.gz -C /oot-src/nvidia-oot --strip-components=1
-        tar xzf hwpm.tar.gz -C /oot-src/hwpm --strip-components=1
-        echo "Sources extracted:"
-        ls /oot-src/
+        for t in nvgpu nvidia-oot hwpm; do
+          mkdir -p /oot-src/$t
+          tar xzf $t.tar.gz -C /oot-src/$t --strip-components=1
+          for p in /pkg/patches/$t/*.patch; do patch -p1 -d /oot-src/$t < $p; done
+        done
     build:
       - |
-        echo "Building NVIDIA conftest (kernel compat detection)..."
-        mkdir -p /oot-src/out/nvidia-conftest/nvidia /oot-src/out/nvidia-linux-header
-
-        # conftest scripts are in nvidia-oot
-        cp -av /oot-src/nvidia-oot/scripts/conftest/* /oot-src/out/nvidia-conftest/nvidia/
-
-        make -j $(nproc) ARCH=arm64 \
-          src=/oot-src/out/nvidia-conftest/nvidia \
-          obj=/oot-src/out/nvidia-conftest/nvidia \
-          LLVM=1 \
-          NV_KERNEL_SOURCES=/src \
-          NV_KERNEL_OUTPUT=/src \
-          -f /oot-src/out/nvidia-conftest/nvidia/Makefile
-        echo "conftest done."
+        # conftest probes the kernel API and writes nvidia/conftest.h, which selects
+        # code paths in every module. Its Makefile hardcodes -Werror; under Clang
+        # several probes emit warnings GCC does not, so they would fail and leave
+        # their macro undefined. Only a real compile error may fail a probe.
+        CONFTEST=/oot-src/out/nvidia-conftest/nvidia
+        mkdir -p $CONFTEST
+        cp -a /oot-src/nvidia-oot/scripts/conftest/. $CONFTEST/
+        sed -i 's/ -Werror / /' $CONFTEST/Makefile
+        make -j$(nproc) -f $CONFTEST/Makefile src=$CONFTEST obj=$CONFTEST \
+          NV_KERNEL_SOURCES=/src NV_KERNEL_OUTPUT=/src
       - |
-        # Patch OOT module Makefiles: remove -Werror and add required include paths.
-        # srctree.nvconftest and srctree.nvidia-oot are passed as make vars at build time.
-        NVIDIA_OOT=/oot-src/nvidia-oot
-        CONFTEST_OUT=/oot-src/out/nvidia-conftest
+        OOT=/oot-src/nvidia-oot
+        SYMS=/oot-src/out/Module.symvers.nvidia
+        : > $SYMS
 
-        # OOT host1x: add conftest + nvidia-oot includes (exports host1x_fence_extract)
-        printf 'ccflags-y += -I$(srctree.nvconftest)\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/include\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/drivers/gpu/host1x/include\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
-        printf 'ccflags-y += -include $(srctree)/include/generated/uapi/linux/version.h\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x/Makefile
-        # Replace conftest macro guards with LINUX_VERSION_CODE checks.
-        # Root cause why conftest probes fail: NV_CONFTEST_CFLAGS hardcodes -Werror;
-        # Clang is stricter than GCC → probe fails → macro undefined → wrong code path.
-        # version.h path confirmed: /src/include/generated/uapi/linux/version.h
-        grep -rl "NV_IOMMU_MAP_HAS_GFP_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_IOMMU_MAP_HAS_GFP_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0)|g"
-        grep -rl "NV_IOMMU_PAGING_DOMAIN_ALLOC_PRESENT" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_IOMMU_PAGING_DOMAIN_ALLOC_PRESENT)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,11,0)|g"
-        grep -rl "NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT)|#if 1 /* OE4T-specific: always present in linux-nv-oot */|g"
-        grep -rl "NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,11,0)|g"
-        grep -rl "NV_BUS_TYPE_STRUCT_MATCH_HAS_CONST_DRV_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_BUS_TYPE_STRUCT_MATCH_HAS_CONST_DRV_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,0)|g"
-        grep -rl "NV_BUS_TYPE_STRUCT_UEVENT_HAS_CONST_DEV_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x/ \
-          | xargs -r sed -i "s|#if defined(NV_BUS_TYPE_STRUCT_UEVENT_HAS_CONST_DEV_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,11,0)|g"
-        echo "Patched OOT host1x: LINUX_VERSION_CODE guards for kernel 6.18"
+        # Build one out-of-tree module directory against the Talos kernel and add its
+        # exported symbols for the modules that follow (order matters). -Werror is
+        # dropped from all Makefiles because Clang warns where GCC does not.
+        oot() {
+          make -j$(nproc) -C /src M=$1 "${@:2}" modules \
+            CONFIG_TEGRA_OOT_MODULE=m ccflags-remove-y=-Werror \
+            srctree.nvidia-oot=$OOT srctree.nvidia=$OOT srctree.nvconftest=/oot-src/out/nvidia-conftest \
+            srctree.hwpm=/oot-src/hwpm srctree.nvgpu=/oot-src/nvgpu \
+            KBUILD_EXTRA_SYMBOLS=$SYMS
+          cat $1/Module.symvers >> $SYMS
+        }
 
-        # host1x-fence: remove -Werror, add conftest + nvidia-oot includes
-        # host1x-next.h lives in drivers/gpu/host1x/include/linux/ within nvidia-oot
-        sed -i 's|ccflags-y += -Werror||g' \
-          ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Makefile
-        printf 'ccflags-y += -I$(srctree.nvconftest)\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/include\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/drivers/gpu/host1x/include\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Makefile
-        # kernel 6.4+: class_create(THIS_MODULE, name) → class_create(name)
-        grep -rl "class_create(THIS_MODULE," ${NVIDIA_OOT}/drivers/gpu/host1x-fence/ \
-          | xargs -r sed -i 's/class_create(THIS_MODULE, /class_create(/g'
-        # kernel 6.x: devnode callback takes const struct device * (not struct device *)
-        grep -rl "host1x_fence_devnode" ${NVIDIA_OOT}/drivers/gpu/host1x-fence/ \
-          | xargs -r sed -i 's/static char \*host1x_fence_devnode(struct device \*/static char *host1x_fence_devnode(const struct device */g'
-        echo "Patched host1x-fence: class_create + devnode const fixes for kernel 6.x"
-
-        # nvmap: remove subdir -Werror, add conftest + nvidia-oot includes
-        sed -i 's|subdir-ccflags-y += -Werror||g' \
-          ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
-        printf 'ccflags-y += -I$(srctree.nvconftest)\n' \
-          >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/include\n' \
-          >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/drivers/video/tegra/nvmap/include\n' \
-          >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
-        # Force-include version.h for LINUX_VERSION_CODE guards in nvmap source patches below.
-        printf 'ccflags-y += -include $(srctree)/include/generated/uapi/linux/version.h\n' \
-          >> ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Makefile
-        # mc-utils: add nvidia-oot includes (for mc_utils.h, hv-ivc.h)
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/include\n' \
-          >> ${NVIDIA_OOT}/drivers/platform/tegra/mc-utils/Makefile
-
-        # governor_pod_scaling: add conftest + nvidia-oot includes
-        # tegra_wmark.c needs <nvidia/conftest.h> → -I$(srctree.nvconftest)
-        # governor_pod_scaling.c needs <trace/events/nvhost_podgov.h> → -I$(srctree.nvidia-oot)/include
-        printf 'ccflags-y += -I$(srctree.nvconftest)\n' \
-          >> ${NVIDIA_OOT}/drivers/devfreq/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/include\n' \
-          >> ${NVIDIA_OOT}/drivers/devfreq/Makefile
-
-        echo "Include paths patched into OOT module Makefiles."
-
-        # Replace conftest macro guards in nvmap source with LINUX_VERSION_CODE checks.
-        grep -rl "NV_GET_USER_PAGES_HAS_ARGS_FLAGS" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_GET_USER_PAGES_HAS_ARGS_FLAGS)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,5,0)|g"
-        grep -rl "NV_MM_STRUCT_STRUCT_HAS_PERCPU_COUNTER_RSS_STAT" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_MM_STRUCT_STRUCT_HAS_PERCPU_COUNTER_RSS_STAT)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,2,0)|g"
-        grep -rl "NV_IOREMAP_PROT_HAS_PGPROT_T_ARG" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_IOREMAP_PROT_HAS_PGPROT_T_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,15,0)|g"
-        grep -rl "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0)|g"
-        grep -rl "NV___ASSIGN_STR_HAS_NO_SRC_ARG" \
-            ${NVIDIA_OOT}/include/trace/events/ \
-            ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ 2>/dev/null \
-          | xargs -r sed -i "s|#if defined(NV___ASSIGN_STR_HAS_NO_SRC_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,10,0)|g"
-        grep -rl "NV__ALLOC_PAGES_BULK_HAS_NO_PAGE_LIST_ARG" \
-            ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV__ALLOC_PAGES_BULK_HAS_NO_PAGE_LIST_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,14,0)|g"
-        grep -rl "NV_FILE_STRUCT_HAS_F_REF" \
-            ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_FILE_STRUCT_HAS_F_REF)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,13,0)|g"
-        grep -rl "NV_GET_FILE_RCU_HAS_DOUBLE_PTR_FILE_ARG" \
-            ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_GET_FILE_RCU_HAS_DOUBLE_PTR_FILE_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,0)|g"
-        grep -rl "NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID" \
-            ${NVIDIA_OOT}/drivers/video/tegra/nvmap/ \
-          | xargs -r sed -i "s|#if defined(NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,11,0)|g"
-        echo "Patched nvmap: LINUX_VERSION_CODE guards for kernel 6.18"
-      - |
-        # ── Cross-compiler mismatch fix: Clang wrapper (definitive) ─────────────
-        # Previous attempts (patching auto.conf, CONFIG_CC_IS_GCC= on make cmdline)
-        # failed because -fmin-function-alignment=8 comes from CONFIG_FUNCTION_ALIGNMENT
-        # in auto.conf via an unconditional $(if ...) expression — NOT guarded by
-        # CONFIG_CC_IS_GCC. The bounds-strict flag similarly may come from UBSAN config.
-        #
-        # Definitive fix: wrap clang in a shell script that strips the known GCC-only
-        # flags BEFORE passing any argument to the real clang binary. This is
-        # source-independent — it works regardless of which Makefile adds the flag
-        # or via which Kconfig variable it is expressed.
-        mkdir -p /usr/local/bin
-        printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    -Wimplicit-fallthrough=*) filtered+=("-Wimplicit-fallthrough") ;;\n    -Wno-maybe-uninitialized) filtered+=("-Wno-uninitialized") ;;\n    -Wno-alloc-size-larger-than|-Wno-alloc-size-larger-than=*) ;;\n    -fplugin=*|-fplugin-arg-*) ;;\n    -pg|-mrecord-mcount|-mfentry|-fpatchable-function-entry=*) ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}" -Wno-unknown-warning-option -Wno-enum-enum-conversion -Wno-implicit-fallthrough -Wno-gnu-variable-sized-type-not-at-end\n' > /usr/local/bin/clang-oot
-        chmod +x /usr/local/bin/clang-oot
-        echo "clang-oot wrapper installed"
-
-        NVIDIA_OOT=/oot-src/nvidia-oot
-        NVIDIA_CONFTEST=/oot-src/out/nvidia-conftest
-        touch /oot-src/out/nvidia-linux-header/Module.symvers.nvidia
-
-        # ── OOT host1x: provides host1x_syncpt_alloc with HOST1X_SYNCPT_GPU support ──
-        # Required for CONFIG_TEGRA_GK20A_NVHOST=y. The OE4T host1x replaces the in-tree
-        # host1x at boot (installed at kernel/drivers/gpu/host1x/ path via squashfs overlay).
-        echo "=== Building OOT host1x ==="
-        make -j $(nproc) ARCH=arm64 \
-          -C /src \
-          M=${NVIDIA_OOT}/drivers/gpu/host1x \
-          CC=/usr/local/bin/clang-oot \
-          CONFIG_TEGRA_OOT_MODULE=m \
-          srctree.nvidia-oot=${NVIDIA_OOT} \
-          srctree.nvconftest=${NVIDIA_CONFTEST} \
-          LLVM=1 \
-          modules 2>&1 | tee /tmp/build-host1x.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "host1x: OK" || { echo "host1x: BUILD FAILED (see errors above)"; exit 1; }
-        cat ${NVIDIA_OOT}/drivers/gpu/host1x/Module.symvers \
-          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
-
-        # ── mc-utils: provides emc_freq_to_bw ──
-        echo "=== Building mc-utils ==="
-        make -j $(nproc) ARCH=arm64 \
-          -C /src \
-          M=${NVIDIA_OOT}/drivers/platform/tegra/mc-utils \
-          CC=/usr/local/bin/clang-oot \
-          CONFIG_TEGRA_OOT_MODULE=m \
-          srctree.nvidia-oot=${NVIDIA_OOT} \
-          srctree.nvconftest=${NVIDIA_CONFTEST} \
-          LLVM=1 \
-          modules 2>&1 | tee /tmp/build-mc-utils.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "mc-utils: OK" || { echo "mc-utils: BUILD FAILED (see errors above)"; exit 1; }
-        cat ${NVIDIA_OOT}/drivers/platform/tegra/mc-utils/Module.symvers \
-          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
-
-        # ── host1x-fence: provides host1x_fence_extract (required by nvgpu NVHOST=y) ──
-        echo "=== Building OOT host1x-fence ==="
-        make -j $(nproc) ARCH=arm64 \
-          -C /src \
-          M=${NVIDIA_OOT}/drivers/gpu/host1x-fence \
-          CC=/usr/local/bin/clang-oot \
-          CONFIG_TEGRA_OOT_MODULE=m \
-          srctree.nvidia-oot=${NVIDIA_OOT} \
-          srctree.nvconftest=${NVIDIA_CONFTEST} \
-          LLVM=1 \
-          KBUILD_EXTRA_SYMBOLS=/oot-src/out/nvidia-linux-header/Module.symvers.nvidia \
-          modules 2>&1 | tee /tmp/build-host1x-fence.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "host1x-fence: OK" || { echo "host1x-fence: BUILD FAILED (see errors above)"; exit 1; }
-        cat ${NVIDIA_OOT}/drivers/gpu/host1x-fence/Module.symvers \
-          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
-
-        # ── host1x-nvhost: legacy /dev/nvhost-* device nodes (bridge layer) ──
-        # OE4T host1x-nvhost.ko provides /dev/nvhost-ctrl-* style devices.
-        # See OE4T/linux-nv-oot drivers/gpu/host1x-nvhost/.
-        echo "=== Building OOT host1x-nvhost ==="
-        sed -i 's|ccflags-y += -Werror||g' \
-          ${NVIDIA_OOT}/drivers/gpu/host1x-nvhost/Makefile
-        printf 'ccflags-y += -I$(srctree.nvconftest)\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x-nvhost/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/include\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x-nvhost/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/drivers/gpu/host1x/include\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x-nvhost/Makefile
-        printf 'ccflags-y += -include $(srctree)/include/generated/uapi/linux/version.h\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/host1x-nvhost/Makefile
-        # Kernel 6.4: class_create(THIS_MODULE, name) -> class_create(name).
-        # Conftest probe for NV_CLASS_CREATE_HAS_NO_OWNER_ARG is unreliable
-        # under Clang/-Werror; replace with LINUX_VERSION_CODE guard.
-        grep -rl "NV_CLASS_CREATE_HAS_NO_OWNER_ARG" ${NVIDIA_OOT}/drivers/gpu/host1x-nvhost/ \
-          | xargs -r sed -i "s|#if defined(NV_CLASS_CREATE_HAS_NO_OWNER_ARG)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)|g"
-        make -j $(nproc) ARCH=arm64 \
-          -C /src \
-          M=${NVIDIA_OOT}/drivers/gpu/host1x-nvhost \
-          CC=/usr/local/bin/clang-oot \
-          CONFIG_TEGRA_OOT_MODULE=m \
-          srctree.nvidia-oot=${NVIDIA_OOT} \
-          srctree.nvconftest=${NVIDIA_CONFTEST} \
-          LLVM=1 \
-          KBUILD_EXTRA_SYMBOLS=/oot-src/out/nvidia-linux-header/Module.symvers.nvidia \
-          modules 2>&1 | tee /tmp/build-host1x-nvhost.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "host1x-nvhost: OK" || { echo "host1x-nvhost: BUILD FAILED (see errors above)"; exit 1; }
-        cat ${NVIDIA_OOT}/drivers/gpu/host1x-nvhost/Module.symvers \
-          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
-
-        # ── linux-hwpm: provides tegra_soc_hwpm_ip_register/unregister ──
-        # tegra-drm/hwpm.c (and virt.c) call into nvhwpm.ko. Build it from
-        # the OE4T linux-hwpm repo we already extracted to /oot-src/hwpm.
-        echo "=== Building OOT linux-hwpm (nvhwpm.ko) ==="
-        HWPM_DIR=/oot-src/hwpm/drivers/tegra/hwpm
-        sed -i 's|ccflags-y += -Werror||g' ${HWPM_DIR}/Makefile 2>/dev/null || true
-        printf 'ccflags-y += -include $(srctree)/include/generated/uapi/linux/version.h\n' \
-          >> ${HWPM_DIR}/Makefile
-        # Patch conftest macros same as host1x/tegra-drm
-        # Conftest macros (same kernel-version mapping as host1x/tegra-drm)
-        for entry in \
-          "NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID|6,11,0" \
-          "NV_CLASS_STRUCT_DEVNODE_HAS_CONST_DEV_ARG|6,2,0" \
-          "NV_CLASS_CREATE_HAS_NO_OWNER_ARG|6,4,0" \
-          "NV_IOMMU_MAP_HAS_GFP_ARG|6,3,0"; do
-          macro="${entry%|*}"; ver="${entry#*|}"
-          { grep -rl "${macro}" ${HWPM_DIR} 2>/dev/null || true; } | while read -r f; do
-            sed -i \
-              -e "s|#if defined(${macro})|#if LINUX_VERSION_CODE >= KERNEL_VERSION(${ver})|g" \
-              -e "s|#if !defined(${macro})|#if LINUX_VERSION_CODE < KERNEL_VERSION(${ver})|g" \
-              -e "s|#elif defined(${macro})|#elif LINUX_VERSION_CODE >= KERNEL_VERSION(${ver})|g" \
-              -e "s|#elif !defined(${macro})|#elif LINUX_VERSION_CODE < KERNEL_VERSION(${ver})|g" \
-              "${f}"
-          done
-        done
-        { grep -rl "NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT" ${HWPM_DIR} 2>/dev/null || true; } | while read -r f; do
-          sed -i "s|#if defined(NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT)|#if 1 /* OE4T: always present */|g" "${f}"
-        done
-        # Kernel 6.5+: get_user_pages() dropped the trailing 'vmas' (struct vm_area_struct **)
-        # parameter. The hwpm source still passes NULL as a 5th arg. Strip it.
-        # See linux commit 54d020692b34 ("mm/gup: remove unused vmas parameter from get_user_pages()").
-        # Use sed -z (slurp mode) since the call spans multiple lines, then
-        # match the specific pattern ", NULL)" right after hwpm->alist_map->pages.
-        sed -i -z 's|hwpm->alist_map->pages, NULL)|hwpm->alist_map->pages)|g' \
-          ${HWPM_DIR}/os/linux/mem_mgmt_utils.c 2>/dev/null || true
-        make -j $(nproc) ARCH=arm64 \
-          -C /src \
-          M=${HWPM_DIR} \
-          CC=/usr/local/bin/clang-oot \
-          CONFIG_TEGRA_OOT_MODULE=m \
-          srctree.nvidia-oot=${NVIDIA_OOT} \
-          srctree.nvconftest=${NVIDIA_CONFTEST} \
-          srctree.hwpm=/oot-src/hwpm \
-          LLVM=1 \
-          KBUILD_EXTRA_SYMBOLS=/oot-src/out/nvidia-linux-header/Module.symvers.nvidia \
-          modules 2>&1 | tee /tmp/build-hwpm.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "linux-hwpm: OK" || { echo "linux-hwpm: BUILD FAILED (see errors above)"; exit 1; }
-        cat ${HWPM_DIR}/Module.symvers \
-          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
-
-        # ── tegra-drm: OE4T DRM driver compatible with patched host1x ABI ──
-        # Builds /dev/dri/renderD128 so libcuda can enumerate the iGPU.
-        # Headless: CONFIG_DRM_TEGRA_HAVE_DISPLAY=n (no DP/DSI/HDMI).
-        echo "=== Building OOT tegra-drm (headless / render-node only) ==="
-        sed -i 's|ccflags-y += -Werror||g' \
-          ${NVIDIA_OOT}/drivers/gpu/drm/tegra/Makefile 2>/dev/null || true
-        printf 'ccflags-y += -I$(srctree.nvconftest)\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/drm/tegra/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/include\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/drm/tegra/Makefile
-        printf 'ccflags-y += -I$(srctree.nvidia-oot)/drivers/gpu/host1x/include\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/drm/tegra/Makefile
-        printf 'ccflags-y += -include $(srctree)/include/generated/uapi/linux/version.h\n' \
-          >> ${NVIDIA_OOT}/drivers/gpu/drm/tegra/Makefile
-        # Force-stub tegra_fbdev_setup in drm.h. The host kernel sets
-        # CONFIG_DRM_FBDEV_EMULATION=y in auto.conf, which is included via
-        # -include linux/autoconf.h — '-U' on ccflags doesn't override it.
-        # Replace '#ifdef CONFIG_DRM_FBDEV_EMULATION' in drm.h with '#if 0'
-        # so the inline stub branch is always picked. We skip fbdev.c in
-        # the Makefile because its drm_fb_helper internals broke heavily
-        # between 6.0 and 6.18.
-        sed -i 's|#ifdef CONFIG_DRM_FBDEV_EMULATION|#if 0 /* fbdev not needed for headless CUDA */|g' \
-          ${NVIDIA_OOT}/drivers/gpu/drm/tegra/drm.h
-        # Replace conftest probe macros with LINUX_VERSION_CODE guards.
-        # Conftest probes are unreliable with Clang/-Werror; explicit version
-        # checks are deterministic. Target kernel: 6.18.x-talos (guards are range-based).
-        TEGRA_DRM=${NVIDIA_OOT}/drivers/gpu/drm/tegra
-        # Generic substitution helper for kernel-version-gated PRESENT/ARG macros
-        # Format: macro|kernel_version
-        for entry in \
-          "NV_IOMMU_MAP_HAS_GFP_ARG|6,3,0" \
-          "NV_IOMMU_PAGING_DOMAIN_ALLOC_PRESENT|6,11,0" \
-          "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS|6,3,0" \
-          "NV_APERTURE_REMOVE_ALL_CONFLICTING_DEVICES_PRESENT|6,0,0" \
-          "NV_FOP_UNSIGNED_OFFSET_PRESENT|6,12,0" \
-          "NV_DRM_DRM_CLIENT_SETUP_H_PRESENT|6,13,0" \
-          "NV_DRM_CLIENTS_DRM_CLIENT_SETUP_H_PRESENT|6,14,0" \
-          "NV_DRM_HELPER_MODE_FILL_FB_STRUCT_HAS_INFO_ARG|6,17,0" \
-          "NV_DRM_MODE_CONFIG_FUNCS_STRUCT_FB_CREATE_HAS_INFO_ARG|6,17,0" \
-          "NV_DRM_APERTURE_REMOVE_FRAMEBUFFERS_HAS_NO_PRIMARY_ARG|6,5,0" \
-          "NV_DRM_DEBUGFS_REMOVE_FILES_HAS_ROOT_ARG|6,7,0" \
-          "NV_DRM_CONNECTOR_HELPER_FUNCS_STRUCT_MODE_VALID_HAS_CONST_ARG|6,15,0" \
-          "NV_DRM_DISPLAY_INFO_STRUCT_HAS_SOURCE_PHYSICAL_ADDRESS|6,7,0" \
-          "NV_DEVM_PM_DOMAIN_ATTACH_LIST_PRESENT|6,13,0" \
-          "NV_DRM_DP_LINK_POWER_UP_PRESENT|6,16,0" \
-          "NV_CLK_HW_DETERMINE_RATE_NO_REPARENT_PRESENT|6,4,0" \
-          "NV_BUS_TYPE_STRUCT_MATCH_HAS_CONST_DRV_ARG|6,8,0" \
-          "NV_BUS_TYPE_STRUCT_UEVENT_HAS_CONST_DEV_ARG|6,11,0" \
-          "NV_PLATFORM_DRIVER_STRUCT_REMOVE_RETURNS_VOID|6,11,0"; do
-          macro="${entry%|*}"; ver="${entry#*|}"
-          # Cover all four #if forms: defined, !defined, elif defined, elif !defined.
-          # When the macro maps to "kernel >= ver", defined() is TRUE iff kernel >= ver.
-          { grep -rl "${macro}" ${TEGRA_DRM} 2>/dev/null || true; } | while read -r f; do
-            sed -i \
-              -e "s|#if defined(${macro})|#if LINUX_VERSION_CODE >= KERNEL_VERSION(${ver})|g" \
-              -e "s|#if !defined(${macro})|#if LINUX_VERSION_CODE < KERNEL_VERSION(${ver})|g" \
-              -e "s|#elif defined(${macro})|#elif LINUX_VERSION_CODE >= KERNEL_VERSION(${ver})|g" \
-              -e "s|#elif !defined(${macro})|#elif LINUX_VERSION_CODE < KERNEL_VERSION(${ver})|g" \
-              "${f}"
-          done
-        done
-        # Macros for APIs REMOVED in newer kernels (inverse logic):
-        for entry in \
-          "NV_DRM_DRIVER_HAS_FBDEV_PROBE|6,13,0" \
-          "NV_DRM_DRIVER_STRUCT_HAS_DATE|6,14,0" \
-          "NV_DRM_DRIVER_STRUCT_HAS_IRQ_ENABLED_ARG|6,4,0" \
-          "NV_DRM_APERTURE_REMOVE_FRAMEBUFFERS_HAS_DRM_DRIVER_ARG|6,0,0"; do
-          macro="${entry%|*}"; ver="${entry#*|}"
-          # For removed-in-newer-kernel macros: defined() means "still present", i.e. kernel < ver.
-          { grep -rl "${macro}" ${TEGRA_DRM} 2>/dev/null || true; } | while read -r f; do
-            sed -i \
-              -e "s|#if defined(${macro})|#if LINUX_VERSION_CODE < KERNEL_VERSION(${ver})|g" \
-              -e "s|#if !defined(${macro})|#if LINUX_VERSION_CODE >= KERNEL_VERSION(${ver})|g" \
-              -e "s|#elif defined(${macro})|#elif LINUX_VERSION_CODE < KERNEL_VERSION(${ver})|g" \
-              -e "s|#elif !defined(${macro})|#elif LINUX_VERSION_CODE >= KERNEL_VERSION(${ver})|g" \
-              "${f}"
-          done
-        done
-        # Always-present in 6.18 (OE4T-tested macros): set to 1
-        for macro in \
-          NV_LINUX_IOSYS_MAP_H_PRESENT \
-          NV_TEGRA_DEV_IOMMU_GET_STREAM_ID_PRESENT \
-          NV_DEVM_TEGRA_CORE_DEV_INIT_OPP_TABLE_COMMON_PRESENT; do
-          { grep -rl "${macro}" ${TEGRA_DRM} 2>/dev/null || true; } | while read -r f; do
-            sed -i \
-              -e "s|#if defined(${macro})|#if 1 /* OE4T: always present */|g" \
-              -e "s|#if !defined(${macro})|#if 0 /* OE4T: always present */|g" \
-              -e "s|#elif defined(${macro})|#elif 1 /* OE4T: always present */|g" \
-              -e "s|#elif !defined(${macro})|#elif 0 /* OE4T: always present */|g" \
-              "${f}"
-          done
-        done
-        echo "Patched tegra-drm: LINUX_VERSION_CODE guards for kernel 6.18"
-        # CONFIG_DRM_FBDEV_EMULATION=n on the Makefile side (no fbdev.o built)
-        # plus -UCONFIG_DRM_FBDEV_EMULATION in ccflags (above) so the C code
-        # sees the stub. We do NOT want fbdev.c — it requires drm_fb_helper
-        # APIs that broke heavily between kernel 6.0 and 6.18.
-        make -j $(nproc) ARCH=arm64 \
-          -C /src \
-          M=${NVIDIA_OOT}/drivers/gpu/drm/tegra \
-          CC=/usr/local/bin/clang-oot \
-          CONFIG_TEGRA_OOT_MODULE=m \
-          CONFIG_DRM_TEGRA_HAVE_DISPLAY=n \
-          CONFIG_DRM_FBDEV_EMULATION=n \
-          srctree.nvidia-oot=${NVIDIA_OOT} \
-          srctree.nvconftest=${NVIDIA_CONFTEST} \
-          srctree.hwpm=/oot-src/hwpm \
-          LLVM=1 \
-          KBUILD_EXTRA_SYMBOLS=/oot-src/out/nvidia-linux-header/Module.symvers.nvidia \
-          modules 2>&1 | tee /tmp/build-tegra-drm.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "tegra-drm: OK" || { echo "tegra-drm: BUILD FAILED (see errors above)"; exit 1; }
-        cat ${NVIDIA_OOT}/drivers/gpu/drm/tegra/Module.symvers \
-          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
-
-        # nvhost-ctrl-shim not built — CUDA works via DRM render node (/dev/dri/renderD128)
-        # to test whether OE4T tegra-drm + host1x-nvhost alone enable GPU on
-
-        # ── nvmap: provides tegra_vpr_dev, nvmap_dma_alloc_attrs, nvmap_dma_free_attrs ──
-        echo "=== Building nvmap ==="
-        make -j $(nproc) ARCH=arm64 \
-          -C /src \
-          M=${NVIDIA_OOT}/drivers/video/tegra/nvmap \
-          CC=/usr/local/bin/clang-oot \
-          CONFIG_TEGRA_OOT_MODULE=m \
-          srctree.nvidia-oot=${NVIDIA_OOT} \
-          srctree.nvconftest=${NVIDIA_CONFTEST} \
-          LLVM=1 \
-          NVMAP_CONFIG=y \
-          NVMAP_CONFIG_LOADABLE_MODULE=y \
-          NVMAP_CONFIG_PAGE_POOLS=y \
-          NVMAP_CONFIG_HANDLE_AS_ID=n \
-          NVMAP_CONFIG_SCIIPC=n \
-          modules 2>&1 | tee /tmp/build-nvmap.log; [[ ${PIPESTATUS[0]} -eq 0 ]] && echo "nvmap: OK" || { echo "nvmap: BUILD FAILED (see errors above)"; exit 1; }
-        cat ${NVIDIA_OOT}/drivers/video/tegra/nvmap/Module.symvers \
-          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
-
-        # ── governor_pod_scaling: provides "nvhost_podgov" devfreq governor for GPU freq scaling ──
-        echo "=== Building governor-pod-scaling ==="
-        make -j $(nproc) ARCH=arm64 \
-          -C /src \
-          M=${NVIDIA_OOT}/drivers/devfreq \
-          CC=/usr/local/bin/clang-oot \
-          CONFIG_TEGRA_OOT_MODULE=m \
-          srctree.nvidia-oot=${NVIDIA_OOT} \
-          srctree.nvconftest=${NVIDIA_CONFTEST} \
-          LLVM=1 \
-          modules 2>&1 && echo "governor-pod-scaling: OK" || echo "governor-pod-scaling: FAILED (continuing)"
-        cat ${NVIDIA_OOT}/drivers/devfreq/Module.symvers \
-          >> /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null || true
-
-        echo "=== nvidia-oot dependency modules done ==="
-        echo "Symbols exported so far:"
-        cat /oot-src/out/nvidia-linux-header/Module.symvers.nvidia | awk '{print $2}' | sort
-      - |
-        echo "Generating nvidia-linux-headers..."
-        cp -av /oot-src/nvidia-oot/include /oot-src/out/nvidia-linux-header/
-        # Combine kernel + nvidia-oot Module.symvers (so nvgpu modpost resolves all deps)
-        cat /src/Module.symvers \
-          /oot-src/out/nvidia-linux-header/Module.symvers.nvidia 2>/dev/null \
-          > /oot-src/out/nvidia-linux-header/Module.symvers
-      - |
-        echo "Building nvgpu module (OE4T patches-r36.5)..."
-        # ── Ensure clang-oot wrapper is present (cache-safe: create inline) ────────
-        # The wrapper was created in the previous build step, but Docker BuildKit
-        # may have served a cached nvidia-linux-header layer that predates it.
-        # Re-create it here unconditionally to be safe.
-        mkdir -p /usr/local/bin
-        printf '#!/bin/bash\nfiltered=()\nfor arg in "$@"; do\n  case "$arg" in\n    -fmin-function-alignment=*|-fconserve-stack) ;;\n    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;\n    -Wimplicit-fallthrough=*) filtered+=("-Wimplicit-fallthrough") ;;\n    -Wno-maybe-uninitialized) filtered+=("-Wno-uninitialized") ;;\n    -Wno-alloc-size-larger-than|-Wno-alloc-size-larger-than=*) ;;\n    -fplugin=*|-fplugin-arg-*) ;;\n    -pg|-mrecord-mcount|-mfentry|-fpatchable-function-entry=*) ;;\n    *) filtered+=("$arg") ;;\n  esac\ndone\nexec clang "${filtered[@]}" -Wno-unknown-warning-option -Wno-enum-enum-conversion -Wno-implicit-fallthrough -Wno-gnu-variable-sized-type-not-at-end\n' > /usr/local/bin/clang-oot
-        chmod +x /usr/local/bin/clang-oot
-        # ── nvgpu source patches ─────────────────────────────────────────────────────
-        # Kernel 6.18 compat: always use vm_flags_set (conftest fails in 6.12+)
-        grep -rl "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" /oot-src/nvgpu/drivers/gpu/nvgpu/ \
-          | xargs -r sed -i "s|#if defined(NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS)|#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,3,0)|g"
-        echo "Patched nvgpu: LINUX_VERSION_CODE guard for vm_flags_set (kernel 6.3+)"
-        # Clang 18+ treats several warnings as errors — suppress globally
-        sed -i '1s|^|ccflags-y += -Wno-implicit-fallthrough -Wno-parentheses-equality -Wno-incompatible-function-pointer-types -Wno-sometimes-uninitialized\n|' \
-          /oot-src/nvgpu/drivers/gpu/nvgpu/Makefile
-        echo "Patched nvgpu Makefile: disabled clang compat warnings"
-        # Force-include version.h for LINUX_VERSION_CODE guard below.
-        printf 'ccflags-y += -include $(srctree)/include/generated/uapi/linux/version.h\n' \
-          >> /oot-src/nvgpu/drivers/gpu/nvgpu/Makefile
-        # class_create(THIS_MODULE, name) -> class_create(name) in kernel 6.4+
-        grep -rl "class_create(THIS_MODULE," /oot-src/nvgpu/drivers/gpu/nvgpu/ \
-          | xargs -r sed -i 's/class_create(THIS_MODULE, /class_create(/g'
-        echo "Patched nvgpu files: class_create kernel 6.4+ compat"
-        # nvhost_host1x.c: retry loop — fixes CUDA error 999 on first cudaStreamSynchronize.
-        # Root cause: during ~1-2ms async GR init window after first kernel submit,
-        # host1x_syncpt_alloc returns NULL → nvgpu_nvhost_get_syncpt_client_managed returns 0.
-        # GA10B ERRATA_SYNCPT_INVALID_ID_0 then rejects id=0 in nvgpu_channel_sync_syncpt_create,
-        # returning -ENOMEM → CUDA error 999. Fix: retry up to 5×1ms to cover the init window.
-        # Inject <linux/delay.h> for msleep() used in the retry loop below.
-        sed -i '1s|^|#include <linux/delay.h>\n|' /oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/nvhost_host1x.c
-        python3 -c "import base64,sys;fname='/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/nvhost_host1x.c';c=open(fname).read();OLD=base64.b64decode(b'dTMyIG52Z3B1X252aG9zdF9nZXRfc3luY3B0X2NsaWVudF9tYW5hZ2VkKHN0cnVjdCBudmdwdV9udmhvc3RfZGV2ICpudmhvc3RfZGV2LAoJCQkJCSAgIGNvbnN0IGNoYXIgKnN5bmNwdF9uYW1lKQp7CglzdHJ1Y3QgaG9zdDF4X3N5bmNwdCAqc3A7CglzdHJ1Y3QgaG9zdDF4ICpob3N0MXg7CgoJaG9zdDF4ID0gcGxhdGZvcm1fZ2V0X2RydmRhdGEobnZob3N0X2Rldi0+aG9zdDF4X3BkZXYpOwoJaWYgKCFob3N0MXgpCgkJcmV0dXJuIDA7CgoJc3AgPSBob3N0MXhfc3luY3B0X2FsbG9jKGhvc3QxeCwgSE9TVDFYX1NZTkNQVF9DTElFTlRfTUFOQUdFRCB8IEhPU1QxWF9TWU5DUFRfR1BVLAoJCQkJIHN5bmNwdF9uYW1lKTsKCWlmICghc3ApCgkJcmV0dXJuIDA7CgoJcmV0dXJuIGhvc3QxeF9zeW5jcHRfaWQoc3ApOwp9').decode();NEW=base64.b64decode(b'dTMyIG52Z3B1X252aG9zdF9nZXRfc3luY3B0X2NsaWVudF9tYW5hZ2VkKHN0cnVjdCBudmdwdV9udmhvc3RfZGV2ICpudmhvc3RfZGV2LAoJCQkJICAgY29uc3QgY2hhciAqc3luY3B0X25hbWUpCnsKCXN0cnVjdCBob3N0MXhfc3luY3B0ICpzcCA9IE5VTEw7CglzdHJ1Y3QgaG9zdDF4ICpob3N0MXg7CglpbnQgcmV0cnk7CgoJLyogbnZncHUgNS4xMC4yOiByZXRyeSB1cCB0byA1bXMgd2hlbiBob3N0MXggc3luY3B0IGFsbG9jIGZhaWxzIGR1cmluZyBHUiBpbml0IHdpbmRvdy4KCSAqIEdBMTBCIEVSUkFUQV9TWU5DUFRfSU5WQUxJRF9JRF8wIHJlamVjdHMgaWQ9MDsgZHVyaW5nIH4xLTJtcyBhZnRlciBmaXJzdCBrZXJuZWwgc3VibWl0CgkgKiBob3N0MXhfc3luY3B0X2FsbG9jIG1heSByZXR1cm4gTlVMTCwgY2F1c2luZyBDVURBIGVycm9yIDk5OSBvbiBjdWRhU3RyZWFtU3luY2hyb25pemUuICovCglmb3IgKHJldHJ5ID0gMDsgcmV0cnkgPCA1OyByZXRyeSsrKSB7CgkJaG9zdDF4ID0gcGxhdGZvcm1fZ2V0X2RydmRhdGEobnZob3N0X2Rldi0+aG9zdDF4X3BkZXYpOwoJCWlmICghaG9zdDF4KSB7CgkJCXByX3dhcm5fcmF0ZWxpbWl0ZWQoIm52Z3B1OiBob3N0MXggbm90IHJlYWR5LCBzeW5jcHQgcmV0cnkgJWQvNVxuIiwgcmV0cnkgKyAxKTsKCQkJbXNsZWVwKDEpOwoJCQljb250aW51ZTsKCQl9CgkJc3AgPSBob3N0MXhfc3luY3B0X2FsbG9jKGhvc3QxeCwKCQkJCUhPU1QxWF9TWU5DUFRfQ0xJRU5UX01BTkFHRUQgfCBIT1NUMVhfU1lOQ1BUX0dQVSwKCQkJCXN5bmNwdF9uYW1lKTsKCQlpZiAoc3ApCgkJCWJyZWFrOwoJCXByX3dhcm5fcmF0ZWxpbWl0ZWQoIm52Z3B1OiBzeW5jcHRfYWxsb2MgTlVMTCwgcmV0cnkgJWQvNVxuIiwgcmV0cnkgKyAxKTsKCQltc2xlZXAoMSk7Cgl9CglpZiAoIXNwKSB7CgkJcHJfZXJyX3JhdGVsaW1pdGVkKCJudmdwdTogZ2V0X3N5bmNwdF9jbGllbnRfbWFuYWdlZDogZmFpbGVkIGFmdGVyIHJldHJpZXNcbiIpOwoJCXJldHVybiAwOwoJfQoJcmV0dXJuIGhvc3QxeF9zeW5jcHRfaWQoc3ApOwp9').decode();assert OLD in c,'nvhost_host1x.c: pattern not found';c=c.replace(OLD,NEW,1);open(fname,'w').write(c);print('Patched nvhost_host1x.c: retry loop in nvgpu_nvhost_get_syncpt_client_managed')"
-        # nvhost_host1x.c: skip syncpt id=0 — GA10b ERRATA_SYNCPT_INVALID_ID_0 workaround.
-        # With NVHOST=y, nvgpu calls host1x_syncpt_alloc(HOST1X_SYNCPT_CLIENT_MANAGED |
-        # HOST1X_SYNCPT_GPU). When no "gpu" pool is defined in the DT, host1x starts
-        # allocating from syncpt_base=0 → returns id=0. nvgpu rejects id=0 due to
-        # NVGPU_ERRATA_SYNCPT_INVALID_ID_0 (GA10b) → channel sync creation fails → error 999.
-        # Fix: allocate id=0 temporarily to advance past the reserved slot, then allocate
-        # again → id=1 (or first free non-zero id). The Tegra234 syncpoint shim covers all
-        # 1024 syncpoints so any non-zero id is GPU-signable.
-        NVHOST_H1X=/oot-src/nvgpu/drivers/gpu/nvgpu/os/linux/nvhost_host1x.c
-        awk '/return host1x_syncpt_id\(sp\);/ { print "\t/* nvgpu 5.9.3: GA10b ERRATA_SYNCPT_INVALID_ID_0: skip syncpt id=0."; print "\t * In the actual source HOST1X_SYNCPT_CLIENT_MANAGED and HOST1X_SYNCPT_GPU"; print "\t * are on separate lines so the original two-condition awk never fired."; print "\t * host1x returns id=0 when GPU pool absent in DT (syncpt_base=0 first free)."; print "\t * Hold id=0, re-allocate to advance past reserved slot to id>=1."; print "\t * Tegra234 syncpt shim covers all 1024 ids so any id>=1 is GPU-signable. */"; print "\tif (host1x_syncpt_id(sp) == 0U) {"; print "\t\tstruct host1x_syncpt *sp_skip = sp;"; print "\t\tsp = host1x_syncpt_alloc(host1x,"; print "\t\t\t\tHOST1X_SYNCPT_CLIENT_MANAGED | HOST1X_SYNCPT_GPU,"; print "\t\t\t\tsyncpt_name);"; print "\t\thost1x_syncpt_put(sp_skip);"; print "\t\tif (!sp)"; print "\t\t\treturn 0;"; print "\t}"; print ""; print "\treturn host1x_syncpt_id(sp);"; next } { print }' "$NVHOST_H1X" > "$NVHOST_H1X.tmp" && mv "$NVHOST_H1X.tmp" "$NVHOST_H1X"
-        echo "Patched nvhost_host1x.c: added syncpt id=0 skip (GA10b ERRATA_SYNCPT_INVALID_ID_0 workaround)"
-        # netlist.c: fix UBSAN array-index-out-of-bounds false positive.
-        # struct netlist_image declares regions[1] (fixed size) but the loop iterates
-        # over all regions from the firmware (header.regions >> 1). UBSAN fires for
-        # every region with index >= 1. Changing to regions[] (C99 flexible array)
-        # silences UBSAN without changing memory layout or behavior.
-        NETLIST_PRIV=/oot-src/nvgpu/drivers/gpu/nvgpu/common/netlist/netlist_priv.h
-        if [ -f "${NETLIST_PRIV}" ]; then
-          sed -i 's/struct netlist_region regions\[1\]/struct netlist_region regions[]/' "${NETLIST_PRIV}"
-          echo "Patched netlist_priv.h: regions[1] → regions[] (silences UBSAN false positive)"
-        fi
-        make -j $(nproc) ARCH=arm64 \
-          -C /src \
-          M=/oot-src/nvgpu/drivers/gpu/nvgpu \
-          CC=/usr/local/bin/clang-oot \
-          CONFIG_TEGRA_OOT_MODULE=m \
-          CONFIG_GK20A=m \
-          CONFIG_TEGRA_GK20A_NVHOST=y \
-          CONFIG_TEGRA_GK20A_NVHOST_HOST1X=y \
-          CONFIG_TEGRA_HWPM=n \
-          srctree.nvgpu=/oot-src/nvgpu \
-          srctree.nvidia=/oot-src/nvidia-oot \
-          srctree.nvconftest=/oot-src/out/nvidia-conftest \
-          LLVM=1 \
-          KBUILD_EXTRA_SYMBOLS=/oot-src/out/nvidia-linux-header/Module.symvers.nvidia \
-          KBUILD_MODPOST_WARN=1 \
-          modules
-        echo "nvgpu done."
+        oot $OOT/drivers/gpu/host1x
+        oot $OOT/drivers/platform/tegra/mc-utils
+        oot $OOT/drivers/gpu/host1x-fence
+        oot $OOT/drivers/gpu/host1x-nvhost
+        oot /oot-src/hwpm/drivers/tegra/hwpm
+        # headless: render node only, no display outputs, no fbdev
+        oot $OOT/drivers/gpu/drm/tegra CONFIG_DRM_TEGRA_HAVE_DISPLAY=n CONFIG_DRM_FBDEV_EMULATION=n
+        oot $OOT/drivers/video/tegra/nvmap NVMAP_CONFIG=y NVMAP_CONFIG_LOADABLE_MODULE=y \
+          NVMAP_CONFIG_PAGE_POOLS=y NVMAP_CONFIG_HANDLE_AS_ID=n NVMAP_CONFIG_SCIIPC=n
+        oot $OOT/drivers/devfreq
+        oot /oot-src/nvgpu/drivers/gpu/nvgpu CONFIG_GK20A=m CONFIG_TEGRA_GK20A_NVHOST=y \
+          CONFIG_TEGRA_GK20A_NVHOST_HOST1X=y CONFIG_TEGRA_HWPM=n KBUILD_MODPOST_WARN=1
     install:
       - |
-        KERNEL_RELEASE=$(cat /src/include/config/kernel.release)
-        echo "Installing for kernel ${KERNEL_RELEASE}..."
-        mkdir -p /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra
-        mkdir -p /rootfs/usr/local/lib/modprobe.d
+        OOT=/oot-src/nvidia-oot
+        MOD=/rootfs/usr/lib/modules/$(cat /src/include/config/kernel.release)
 
-        # nvgpu
-        find /oot-src/nvgpu -name "*.ko" \
-          -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \;
+        install -D -m 644 -t $MOD/extra/nvidia-tegra $(find /oot-src -name '*.ko')
+        # Shadow the in-tree host1x and tegra-drm. They are built against the vanilla
+        # host1x ABI; depmod would otherwise point modprobe at them and tegra_drm
+        # fails with "disagrees about version of symbol host1x_job_alloc".
+        install -D -m 644 -t $MOD/kernel/drivers/gpu/host1x    $OOT/drivers/gpu/host1x/host1x.ko
+        install -D -m 644 -t $MOD/kernel/drivers/gpu/drm/tegra $OOT/drivers/gpu/drm/tegra/tegra-drm.ko
 
-        # OOT host1x: install at kernel/drivers/gpu/host1x/ to shadow the in-tree host1x.ko
-        # The squashfs overlay replaces the in-tree module so nvgpu's NVHOST=y path gets
-        # the OE4T host1x with HOST1X_SYNCPT_GPU support instead of the upstream stub.
-        mkdir -p /rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/drivers/gpu/host1x
-        find /oot-src/nvidia-oot/drivers/gpu/host1x -name "host1x.ko" \
-          -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/drivers/gpu/host1x/ \;
-        # host1x-fence goes to extra/ (no in-tree equivalent)
-        find /oot-src/nvidia-oot/drivers/gpu/host1x-fence -name "*.ko" \
-          -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \;
+        # Sign with the same fixed key the kernel was built with (setup-keys.sh copies
+        # it into the package directory). A key mismatch leaves every module unloadable.
+        cp /pkg/signing_key.pem /pkg/signing_key.x509 /src/certs/
+        find $MOD -name '*.ko' -exec /src/scripts/sign-file sha512 \
+          /src/certs/signing_key.pem /src/certs/signing_key.x509 {} \;
 
-        # OE4T tegra-drm: also install at the kernel/drivers/gpu/drm/tegra path
-        # so modprobe finds OUR tegra-drm.ko (built against OE4T host1x ABI) instead
-        # of the vanilla Talos kernel's tegra-drm.ko (built against vanilla host1x).
-        # Otherwise depmod creates 'kernel/drivers/gpu/drm/tegra/tegra-drm.ko: kernel/drivers/gpu/host1x/host1x.ko'
-        # which points modprobe at the WRONG tegra-drm.ko, failing with
-        # 'tegra_drm: disagrees about version of symbol host1x_job_alloc'.
-        mkdir -p /rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/drivers/gpu/drm/tegra
-        find /oot-src/nvidia-oot/drivers/gpu/drm/tegra -name "tegra-drm.ko" \
-          -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/kernel/drivers/gpu/drm/tegra/ \;
-
-        # nvhwpm.ko lives in /oot-src/hwpm/, NOT /oot-src/nvidia-oot/. The generic
-        # find below misses it — install explicitly.
-        find /oot-src/hwpm -name "nvhwpm.ko" \
-          -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \;
-
-        # All nvidia-oot modules go to extra/ as usual
-        find /oot-src/nvidia-oot -name "*.ko" \
-          -exec install -m 644 {} /rootfs/usr/lib/modules/${KERNEL_RELEASE}/extra/nvidia-tegra/ \;
-
-        # Use a fixed signing key if present in the package directory.
-        # This ensures reproducible module signing across builds — required because
-        # the kernel stage regenerates a new random signing key on every cache miss.
-        # The fixed key must match the signing_key.pem baked into the running kernel
-        # (i.e., the same key used when building custom-installer).
-        # To rotate: delete /pkg/signing_key.pem and signing_key.x509, rebuild
-        # custom-installer first, then copy the new key from the kernel-build cache.
-        if [ -f /pkg/signing_key.pem ] && [ -f /pkg/signing_key.x509 ]; then
-          echo "Using fixed signing key from /pkg/ (reproducible builds)"
-          cp /pkg/signing_key.pem /src/certs/signing_key.pem
-          cp /pkg/signing_key.x509 /src/certs/signing_key.x509
-        else
-          echo "WARNING: No fixed signing key found — using kernel-generated key (may not match running kernel)"
-        fi
-        echo "Signing kernel modules..."
-        find /rootfs/usr/lib/modules/${KERNEL_RELEASE}/ \
-             -name "*.ko" 2>/dev/null | while read ko; do
-          /src/scripts/sign-file sha512 \
-            /src/certs/signing_key.pem \
-            /src/certs/signing_key.x509 \
-            "${ko}"
-          echo "  Signed: ${ko}"
-        done
-
-        # Load order (NVHOST=y: host1x must load before host1x-fence and nvgpu):
-        # host1x provides syncpoint alloc; host1x-fence provides fence extract;
-        # nvmap provides GPU memory; mc-utils provides emc_freq_to_bw; nvgpu last.
+        # Load order: tegra-drm needs the OE4T host1x stack; nvgpu needs all of it.
         mkdir -p /rootfs/usr/lib/modprobe.d
-        # Load order: host1x → host1x-fence → host1x-nvhost → tegra-drm → nvmap → nvgpu
-        # tegra-drm registers /dev/dri/renderD128 so libcuda can enumerate the iGPU.
-        # nvhost-ctrl-shim not installed — CUDA uses /dev/dri/renderD128 via tegra-drm.ko.
-        # cleanly test whether DRM alone makes GPU work on Talos+OE4T.
         printf 'softdep tegra-drm pre: host1x host1x-fence host1x-nvhost\n' \
           > /rootfs/usr/lib/modprobe.d/nvidia-tegra.conf
         printf 'softdep nvgpu pre: host1x nvmap host1x-fence host1x-nvhost tegra-drm mc-utils\n' \
           >> /rootfs/usr/lib/modprobe.d/nvidia-tegra.conf
 
-        # Also export vmlinuz.efi + signing key so the build script can build
-        # custom-installer without a separate 4.72 GB kernel-build export step.
-        mkdir -p /rootfs/kernel
-        cp /src/arch/arm64/boot/vmlinuz.efi /rootfs/kernel/vmlinuz.efi
-        cp /src/certs/talos_signing_key.x509 /rootfs/kernel/talos_signing_key.x509 2>/dev/null || \
-          cp /src/certs/signing_key.x509 /rootfs/kernel/signing_key.x509 2>/dev/null || true
-        echo "Exported vmlinuz.efi and signing key to /rootfs/kernel/"
-
-        echo "Installed modules:"
-        find /rootfs -name "*.ko" | sort
+        # build-extensions.sh takes the kernel image and signing cert from here to
+        # assemble custom-installer without exporting the whole kernel-build stage.
+        install -D -m 644 -t /rootfs/kernel /src/arch/arm64/boot/vmlinuz.efi /src/certs/talos_signing_key.x509
 finalize:
   - from: /rootfs
     to: /rootfs

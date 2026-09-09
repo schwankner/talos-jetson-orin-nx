@@ -104,10 +104,11 @@ jobs:
           echo "✓ talos-pkgs ready at $(git -C /tmp/talos-pkgs rev-parse --short HEAD)"
 
           # Inject our custom packages into the pkgs tree
+          # whole directory: pkg.yaml plus patches/ (applied from /pkg inside the build)
           mkdir -p /tmp/talos-pkgs/nvidia-tegra-nvgpu
-          cp "${GITHUB_WORKSPACE}/nvidia-tegra-nvgpu/pkg.yaml" \
-             /tmp/talos-pkgs/nvidia-tegra-nvgpu/pkg.yaml
-          echo "✓ nvidia-tegra-nvgpu/pkg.yaml injected"
+          cp -r "${GITHUB_WORKSPACE}/nvidia-tegra-nvgpu/." \
+             /tmp/talos-pkgs/nvidia-tegra-nvgpu/
+          echo "✓ nvidia-tegra-nvgpu/ injected: $(ls /tmp/talos-pkgs/nvidia-tegra-nvgpu/patches/*/*.patch | wc -l) patches"
 
           mkdir -p /tmp/talos-pkgs/kernel-modules-clang
           cp "${GITHUB_WORKSPACE}/kernel-modules-clang/pkg.yaml" \
