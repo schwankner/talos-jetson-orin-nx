@@ -77,9 +77,9 @@ machine:
     # Used to provide instructions for installations.
     install:
         disk: /dev/nvme0n1 # The disk used for installations.
-        image: ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.12.0-drm-noshim # Custom installer with clang kernel + NVIDIA extensions.
+        image: ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.13.0-drm-noshim # Custom installer with clang kernel + NVIDIA extensions.
         # Local registry fallback (when ghcr.io package is not yet public or CI hasn't run):
-        # image: 10.0.10.24:5001/custom-installer:v1.14.0-6.18.48-nvgpu5.12.0-drm-noshim
+        # image: 10.0.10.24:5001/custom-installer:v1.14.0-6.18.48-nvgpu5.13.0-drm-noshim
         wipe: true # Wipe the installation disk to ensure clean state.
         # grubUseUKICmdline: MUST NOT be set on arm64/UKI-based installs!
         # This flag is for legacy x86 GRUB only. On Jetson Orin NX (arm64), Talos uses

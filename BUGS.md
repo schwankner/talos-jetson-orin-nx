@@ -712,6 +712,7 @@ archived here as documentation for future reference.
 | 5.11.0 | drm | Full OE4T DRM stack (tegra-drm + host1x-nvhost + nvhwpm), no shim — tegra-drm.ko only in extra/, vanilla in-tree one wins | ❌ no /dev/dri | — |
 | 5.11.1 | drm | tegra-drm.ko + host1x.ko also installed at the in-tree shadow paths → /dev/dri/renderD128, CUDA via DRM render node | ✅ | ~66 tok/s |
 | 5.12.0 | drm | pkg.yaml 624→127 lines: patch files, KCFLAGS, conftest with CC=clang (all NV_* macros real), no clang-oot wrapper (Bug 24) | ✅ | 66.0 tok/s (qwen2.5:0.5b), 16.5 (qwen3:4b) |
+| 5.13.0 | drm | 122 lines: 3 patches (fbdev, syncpt, netlist), no -Wno flags, only non-default make vars; every module byte-for-byte the same size as 5.12.0 | ✅ (build) | identical binaries |
 
 ### Resolution
 
@@ -1152,6 +1153,18 @@ Clang warning suppressions go through `KCFLAGS`, `-Werror` is filtered with
 patch files under `nvidia-tegra-nvgpu/patches/`. `pkg.yaml` shrank from 624 to 127 lines; the
 build (34352832690) links all ten modules with zero errors. Extension version bumped to
 `5.12.0-drm-noshim` so the known-good 5.11.1 images stay on ghcr.
+
+**Round two (5.13.0)**: with conftest working, three of the six patches turned out to duplicate
+guards the OE4T sources already carry (`class_create()` owner argument, the `devnode` signature,
+`get_user_pages()` without `vmas`), so they are gone. The eight `-Wno-*` flags only silenced
+warnings that no longer fail the build, `hwpm/include` is added by the Makefiles that need it, and
+`CONFIG_GK20A=m`, `CONFIG_TEGRA_HWPM`, `CONFIG_DRM_TEGRA_HAVE_DISPLAY` and
+`NVMAP_CONFIG_LOADABLE_MODULE` are defaults or unused. Two things measured as necessary on the
+way: removing `-Werror` from the conftest Makefile (103 macros with it, 129 without; nvmap fails
+on `__assign_str` otherwise, and the inverted probe `NV_DRM_FB_HELPER_ALLOC_INFO_PRESENT` reports
+a false positive) and `NVMAP_CONFIG_SCIIPC=n`, because the OE4T default for 5.10+ kernels is `y`
+and pulls in unresolved `NvSciIpc*` symbols. Build 34380293058: all ten modules exactly the same
+size as in 5.12.0, same paths, same softdep file.
 
 ## Bug 25 — Same-Version `talosctl upgrade` Never Boots the New UKI on Jetson UEFI (Reports Success Anyway)
 
