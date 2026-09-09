@@ -62,8 +62,8 @@ steps:
         sed -i 's/ -Werror / /' $CONFTEST/Makefile
         make -j$(nproc) -f $CONFTEST/Makefile src=$CONFTEST obj=$CONFTEST \
           NV_KERNEL_SOURCES=/src NV_KERNEL_OUTPUT=/src
-        # a probe every 6.3+ kernel must pass; fails the build if conftest is broken
-        grep -q '#define NV_IOMMU_MAP_HAS_GFP_ARG' $CONFTEST/conftest.h
+        # a probe every 6.3+ kernel must pass: fails the build if conftest itself is broken
+        grep -rq '#define NV_IOMMU_MAP_HAS_GFP_ARG' $CONFTEST/conftest/
       - |
         OOT=/oot-src/nvidia-oot
         SYMS=/oot-src/out/Module.symvers.nvidia
