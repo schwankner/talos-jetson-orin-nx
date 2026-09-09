@@ -234,6 +234,14 @@ ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.11.1-drm-noshim
 > `UnattendedInstallConfig` and `EtcFileConfig` documents, but still work unchanged; migrating them
 > is tracked separately.
 
+> **Same-version upgrades on Jetson UEFI (Bug 25):** when only the extension changes and the Talos
+> version stays the same, the installer writes the new UKI as `Talos-vX.Y.Z~N.efi` and selects it via
+> the `LoaderEntryDefault` EFI variable. Jetson UEFI 36.4.3 does not persist that runtime write, so
+> sd-boot boots the old UKI and `talosctl upgrade` still reports success. Verify with
+> `talosctl get extensions`; if the old version is still running, pick the `~N` entry once in the
+> sd-boot menu at boot, then run the same upgrade again to make it stick. Details in
+> [BUGS.md](BUGS.md#bug-25--same-version-talosctl-upgrade-never-boots-the-new-uki-on-jetson-uefi-reports-success-anyway).
+
 ---
 
 ## Versions
