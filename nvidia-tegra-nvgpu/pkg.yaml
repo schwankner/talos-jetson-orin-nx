@@ -27,6 +27,10 @@ steps:
       ARCH: arm64
       LLVM: "1"
       LLVM_IAS: "1"
+      # conftest compiles its probes with $CC (default: cc = GCC). Against a
+      # Clang-built kernel those probes fail wholesale and every NV_* macro stays
+      # undefined. The kernel build itself ignores CC when LLVM=1.
+      CC: clang
       # The OE4T top-level Makefiles add these include paths for every module; we
       # build the module directories individually, so pass them globally instead.
       # The -Wno-* flags cover warnings Clang raises in the OE4T sources.
@@ -58,6 +62,8 @@ steps:
         sed -i 's/ -Werror / /' $CONFTEST/Makefile
         make -j$(nproc) -f $CONFTEST/Makefile src=$CONFTEST obj=$CONFTEST \
           NV_KERNEL_SOURCES=/src NV_KERNEL_OUTPUT=/src
+        # a probe every 6.3+ kernel must pass; fails the build if conftest is broken
+        grep -q '#define NV_IOMMU_MAP_HAS_GFP_ARG' $CONFTEST/conftest.h
       - |
         OOT=/oot-src/nvidia-oot
         SYMS=/oot-src/out/Module.symvers.nvidia
