@@ -709,6 +709,9 @@ archived here as documentation for future reference.
 | **5.10.4** | **shim** | **pkg.yaml pin updated to correct commit — interrupt-driven wait active** | **✅** | **~16 tok/s** |
 | **5.10.5** | **shim** | **pr_info → pr_debug in hot path (SYNCPT_WAITMEX fired 100s×/s → kernel log overhead removed)** | **✅** | **~23 tok/s** |
 | **5.10.6** | **shim** | **POLL_FD_CREATE (nr=16, 0x80084810) via anon_inode_getfd — eliminates unknown-ioctl warning** | **✅** | **~23 tok/s** |
+| 5.11.0 | drm | Full OE4T DRM stack (tegra-drm + host1x-nvhost + nvhwpm), no shim — tegra-drm.ko only in extra/, vanilla in-tree one wins | ❌ no /dev/dri | — |
+| 5.11.1 | drm | tegra-drm.ko + host1x.ko also installed at the in-tree shadow paths → /dev/dri/renderD128, CUDA via DRM render node | ✅ | ~66 tok/s |
+| 5.12.0 | drm | pkg.yaml 624→127 lines: patch files, KCFLAGS, conftest with CC=clang (all NV_* macros real), no clang-oot wrapper (Bug 24) | ✅ | 66.0 tok/s (qwen2.5:0.5b), 16.5 (qwen3:4b) |
 
 ### Resolution
 
@@ -1180,4 +1183,10 @@ because the new version sorts first.
   `talosctl get extensions` (and `talosctl read /sys/firmware/efi/efivars/LoaderEntrySelected-...`).
 - Upstream: Talos could additionally write `default Talos-vX~N.efi` into `loader.conf` on the EFI
   partition (which does persist) instead of relying on the EFI variable alone.
+
+**Validation (2026-09-09)**: after selecting `talos-v1.14.0~4.efi` once in the sd-boot menu the node
+ran extension 5.12.0: `/dev/dri` card0/card1/renderD128, all ten OOT modules loaded with new
+srcversions, no GPU errors in dmesg, Ollama `library=CUDA compute=8.7`, models 100 % VRAM-resident,
+qwen2.5:0.5b 64.7/66.0/66.0 tok/s and qwen3:4b 16.5 tok/s (references 65–66 and 16.4), GPU at
+918 MHz under load. The simplified build is therefore functionally identical to 5.11.1.
 
