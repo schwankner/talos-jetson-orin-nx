@@ -18,7 +18,7 @@
 machine:
   install:
     disk: /dev/nvme0n1
-    image: ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.12.0-drm-noshim
+    image: ghcr.io/schwankner/custom-installer:v1.14.0-6.18.48-nvgpu5.13.0-drm-noshim
     wipe: false
   kernel:
     modules:
